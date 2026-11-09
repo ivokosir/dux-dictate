@@ -9,9 +9,13 @@ import qs.Modules.Plugins
 
 // Runs once (daemon surface): the small pill in the top-right corner.
 //
+//   problem        [icon] text [⟳] [✕]
+//
+// and only while a fullscreen window covers the bar (the bar button shows
+// these the rest of the time):
+//
 //   talking        [mic glow] 0:12        mouse on it: [✕] [✨] [✓]
 //   working        [mic + spinner] [✕]
-//   problem        [icon] text [⟳] [✕]
 //
 // It hides while the bar popout is open (the popout shows the same things),
 // and disappears when a take is done.
@@ -32,7 +36,10 @@ PluginComponent {
     // Not every message is bad news: "cleaned text copied" is just information.
     readonly property bool notice: problem && st.problem === "cleancopied"
     readonly property bool bad: problem && !notice
-    readonly property bool shown: (recording || busy || problem) && st.popout !== true
+    // Talking and working are the bar button's job; the card takes over only
+    // when a fullscreen window hides the bar. Problems always show here.
+    readonly property bool barHidden: targetScreen ? CompositorService.visibleNiriFullscreenToplevelOnScreen(targetScreen) : false
+    readonly property bool shown: (problem || ((recording || busy) && barHidden)) && st.popout !== true
 
     function run(args) {
         Quickshell.execDetached([root.bin].concat(args));

@@ -472,9 +472,11 @@ PluginComponent {
     //
     //   idle       the mode's icon (mic / ◉)
     //   dictating  teal fill, mic, timer
+    //   working    teal fill, the mic (or ✨ while cleaning up) pulses
     //   meeting    red fill, ◉ (or the mic while you also dictate), the meeting's timer
 
     readonly property bool pillTimer: dict.recording || meet.recording
+    readonly property bool pillFilled: pillTimer || dict.busy
     // The mic shows dictation; ◉ shows the meeting.
     readonly property bool pillMic: dict.active || (!meet.recording && !root.meeting)
 
@@ -483,7 +485,7 @@ PluginComponent {
         property Item content
         readonly property Item box: content && content.parent ? content.parent.parent : null
         anchors.centerIn: parent
-        visible: root.pillTimer
+        visible: root.pillFilled
         width: box ? box.width : content.width + 16
         height: box ? box.height : root.widgetThickness
         radius: Theme.cornerRadius
@@ -493,7 +495,8 @@ PluginComponent {
     component PillIcon: DIcon {
         name: !root.pillMic ? "radio_button_checked"
             : dict.phase === "down" ? "mic_off"
-            : dict.barError ? dict.problemIcon[dict.st.problem] : "mic"
+            : dict.barError ? dict.problemIcon[dict.st.problem]
+            : dict.phase === "cleaning" ? "auto_awesome" : "mic"
         filled: root.pillMic ? dict.active : meet.recording
         size: root.iconSize
         color: meet.recording ? "white"
@@ -502,7 +505,18 @@ PluginComponent {
             : dict.barError ? Theme.error
             : (dict.recording || dict.busy) ? Theme.primary
             : (Theme.widgetTextColor || Theme.surfaceText)
-        opacity: root.pillMic ? (dict.busy ? 0.55 : 1) : (meet.recording ? 1 : 0.7)
+        opacity: root.pillMic ? pulse : (meet.recording ? 1 : 0.7)
+
+        // Working (transcribing / cleaning up): the icon breathes.
+        property real pulse: 1
+        readonly property bool working: root.pillMic && dict.busy
+        onWorkingChanged: if (!working) pulse = 1
+        SequentialAnimation on pulse {
+            running: working
+            loops: Animation.Infinite
+            NumberAnimation { to: 0.35; duration: 600; easing.type: Easing.InOutSine }
+            NumberAnimation { to: 1; duration: 600; easing.type: Easing.InOutSine }
+        }
     }
 
     component PillTime: StyledText {
