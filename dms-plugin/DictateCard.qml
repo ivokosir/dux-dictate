@@ -7,7 +7,14 @@ import qs.Services
 import qs.DCommon.Widgets
 import qs.Modules.Plugins
 
-// Runs once (daemon surface). Shows a notification-style card while you talk.
+// Runs once (daemon surface): the small pill in the top-right corner.
+//
+//   talking        [mic glow] 0:12        mouse on it: [✕] [✨] [✓]
+//   working        [mic + spinner] [✕]
+//   problem        [icon] text [⟳] [✕]
+//
+// It hides while the bar popout is open (the popout shows the same things),
+// and disappears when a take is done.
 PluginComponent {
     id: root
 
@@ -15,16 +22,14 @@ PluginComponent {
     property string bin: Quickshell.env("HOME") + "/.local/bin/dictate"
     property var st: ({ daemon: false })
     property real nowMs: Date.now()
-    // Mic loudness 0..1 while recording; the badge breathes with it.
+    // Mic loudness 0..1 while recording; the mic circle glows with it.
     property real voice: 0
 
     readonly property string phase: st.daemon === true ? (st.state || "idle") : "idle"
-    // When it's done, the card just goes away. It stays only for problems
-    // (failed, or paste failed so the text is on the clipboard instead).
-    readonly property bool shown: phase === "recording" || busy || phase === "error" || (phase === "done" && !!st.error)
     readonly property bool recording: phase === "recording"
     readonly property bool busy: phase === "transcribing" || phase === "cleaning"
-    readonly property bool luna: st.mode === "luna"
+    readonly property bool problem: phase === "problem"
+    readonly property bool shown: (recording || busy || problem) && st.popout !== true
 
     function run(args) {
         Quickshell.execDetached([root.bin].concat(args));
@@ -32,7 +37,9 @@ PluginComponent {
 
     function clock(ms) {
         const s = Math.max(0, Math.floor(ms / 1000));
-        return Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+        const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+        const pad = n => String(n).padStart(2, "0");
+        return (h > 0 ? h + ":" + pad(m) : m) + ":" + pad(x);
     }
 
     Process {
@@ -43,7 +50,7 @@ PluginComponent {
             onRead: data => {
                 // "L 0.420" = mic level (~20x/s while recording): cheap path, no JSON.
                 if (data.charCodeAt(0) === 76) {
-                    const v = root.recording ? (Number(data.slice(2)) || 0) : 0;
+                    const v = root.recording && root.shown ? (Number(data.slice(2)) || 0) : 0;
                     // Ignore tiny changes so silence doesn't cause redraws.
                     if (Math.abs(v - root.voice) > 0.04 || (v === 0 && root.voice !== 0))
                         root.voice = v;
@@ -75,7 +82,7 @@ PluginComponent {
     Timer {
         interval: 500
         repeat: true
-        running: root.recording
+        running: root.recording && root.shown
         triggeredOnStart: true
         onTriggered: root.nowMs = Date.now()
     }
@@ -89,106 +96,77 @@ PluginComponent {
         return Quickshell.screens.length > 0 ? Quickshell.screens[0] : null;
     }
 
-    readonly property string title: {
-        switch (phase) {
-        case "recording":
-            return "Listening";
-        case "transcribing":
-            return "Transcribing";
-        case "cleaning":
-            return "Cleaning up";
-        case "done":
-            return "Couldn't paste: it's on your clipboard";
-        case "error":
-            return "Didn't work";
-        }
-        return "";
-    }
+    // [icon, text, small text after it]
+    readonly property var problemInfo: ({
+        cleanfail: ["auto_awesome", "Clean-up failed", "pasted raw"],
+        paste: ["content_paste", "Couldn't paste", "on clipboard"],
+        nospeech: ["voice_over_off", "No speech heard", ""],
+        mic: ["mic_off", "Mic not working", ""],
+        eleven: ["cloud_off", "Didn't go through", ""],
+        nokey: ["key_off", "No ElevenLabs key", ""],
+        other: ["error", "Something went wrong", ""]
+    })
+    readonly property var prob: problemInfo[st.problem] || problemInfo.other
 
-    readonly property string subtitle: {
-        const parts = [];
-        if (recording)
-            parts.push(clock(nowMs - (Number(st.started_ms) || nowMs)));
-        if (phase === "recording" || busy)
-            parts.push(st.live ? "Live" : "ElevenLabs");
-        if (luna)
-            parts.push("Luna cleanup");
-        return parts.join("  ·  ");
-    }
+    // ---- building blocks: all 32 px circles, 6 px apart ------------------------
 
-    readonly property string bodyText: {
-        if (phase === "error")
-            return st.error || "";
-        // Only live mode shows words, and only while you talk; never the final pasted text.
-        if (phase !== "recording" || !st.live)
-            return "";
-        const t = st.text || "";
-        return t.length > 260 ? "…" + t.slice(-260) : t;
-    }
+    readonly property int unit: 32
+    readonly property int gap: 6
 
-    readonly property color accent: phase === "error" ? Theme.error : recording ? Theme.error : Theme.primary
-
-    // ---- small building blocks ------------------------------------------------
-
-    component Btn: Rectangle {
-        id: btn
-
-        property string label: ""
-        property string icon: ""
-        property string kind: "text" // filled | tonal | text
+    // A round icon button: ghost (default) or filled.
+    component RoundBtn: Rectangle {
+        id: rb
+        property string icon
+        property bool filled: false
+        property color hoverTint: Theme.surfaceText
         signal clicked
-
-        implicitHeight: 34
-        implicitWidth: row.implicitWidth + (kind === "text" ? 20 : 28)
-        radius: height / 2
-        color: {
-            const base = kind === "filled" ? Theme.primary : kind === "tonal" ? Theme.withAlpha(Theme.primary, 0.16) : "transparent";
-            return area.containsMouse ? Qt.tint(base, Theme.withAlpha(kind === "filled" ? Theme.onPrimary : Theme.primary, 0.1)) : base;
-        }
-        readonly property color fg: kind === "filled" ? Theme.onPrimary : Theme.primary
-
-        Behavior on color {
-            ColorAnimation { duration: 120 }
-        }
-
-        Row {
-            id: row
+        width: root.unit
+        height: root.unit
+        radius: width / 2
+        color: filled ? (area.containsMouse ? Qt.lighter(Theme.primary, 1.12) : Theme.primary)
+                      : (area.containsMouse ? Theme.withAlpha(hoverTint, 0.1) : "transparent")
+        DIcon {
             anchors.centerIn: parent
-            spacing: 6
-
-            DIcon {
-                visible: btn.icon !== ""
-                name: btn.icon
-                size: 18
-                color: btn.fg
-                anchors.verticalCenter: parent.verticalCenter
-            }
-
-            StyledText {
-                text: btn.label
-                color: btn.fg
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
-                anchors.verticalCenter: parent.verticalCenter
-            }
+            name: rb.icon
+            size: 18
+            filled: true
+            color: rb.filled ? Theme.onPrimary : (area.containsMouse && rb.hoverTint !== Theme.surfaceText ? rb.hoverTint : Theme.surfaceVariantText)
         }
-
         MouseArea {
             id: area
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: btn.clicked()
+            onClicked: rb.clicked()
         }
     }
 
-    // ---- the card --------------------------------------------------------------
+    // One piece of the morph: spins and shrinks away, or back in.
+    component Morph: Item {
+        property bool on: true
+        property int turn: 90
+        opacity: on ? 1 : 0
+        scale: on ? 1 : 0.5
+        rotation: on ? 0 : turn
+        Behavior on opacity {
+            NumberAnimation { duration: 200 }
+        }
+        Behavior on scale {
+            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+        }
+        Behavior on rotation {
+            NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+        }
+    }
+
+    // ---- the pill ----------------------------------------------------------------
 
     PanelWindow {
         id: win
 
         readonly property real pad: 16
-        readonly property real cardWidth: 400
+        // Fixed size: the pill grows inside it, so the window never resizes.
+        readonly property real maxWidth: 360
 
         screen: root.targetScreen
         visible: root.shown || card.opacity > 0.01
@@ -213,13 +191,16 @@ PluginComponent {
             return info && info.topBar > 0 ? info.topBar : Theme.popupDistance;
         }
 
+        // A little below the bar, so the pill clears the window borders under it.
+        readonly property real drop: 12
+
         margins {
-            top: Math.max(0, topGap - pad)
+            top: Math.max(0, topGap + drop - pad)
             right: Math.max(0, Theme.popupDistance - pad)
         }
 
-        implicitWidth: cardWidth + pad * 2
-        implicitHeight: card.implicitHeight + pad * 2
+        implicitWidth: maxWidth + pad * 2
+        implicitHeight: 44 + pad * 2
 
         mask: Region {
             item: card
@@ -237,196 +218,181 @@ PluginComponent {
         Rectangle {
             id: card
 
-            x: win.pad
-            y: win.pad + (root.shown ? 0 : -14)
-            width: win.cardWidth
-            implicitHeight: content.implicitHeight + 32
-            height: implicitHeight
-            radius: Theme.windowRadius
+            readonly property bool hovered: hover.hovered && root.recording
+            // Which row decides the width right now.
+            readonly property Item row: root.recording ? (hovered ? acts : rest) : info
+
+            height: 44
+            width: Math.ceil(row.implicitWidth) + root.gap * 2 + 2
+            x: win.width - win.pad - width
+            y: win.pad + (root.shown ? 0 : -10)
+            radius: height / 2
             color: Theme.hostSurface
-            border.color: root.recording ? Theme.withAlpha(Theme.error, 0.45) : Theme.outlineVariant
             border.width: 1
+            border.color: root.problem ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.outlineVariant, 0.55)
             opacity: root.shown ? 1 : 0
             clip: true
 
+            Behavior on width {
+                // Ease out only: the pill moves straight to its new size, no overshoot.
+                NumberAnimation { duration: 260; easing.type: Easing.OutCubic }
+            }
             Behavior on opacity {
                 NumberAnimation { duration: 180; easing.type: Easing.OutCubic }
             }
             Behavior on y {
                 NumberAnimation { duration: 220; easing.type: Easing.OutCubic }
             }
-            Behavior on implicitHeight {
-                NumberAnimation { duration: 160; easing.type: Easing.OutCubic }
-            }
-            Behavior on border.color {
-                ColorAnimation { duration: 200 }
+
+            HoverHandler {
+                id: hover
             }
 
-            Column {
-                id: content
+            // At rest while talking: glowing mic + timer.
+            Row {
+                id: rest
+                x: root.gap + 1
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.gap
+                visible: root.recording
+                enabled: !card.hovered
 
-                x: 16
-                y: 16
-                width: parent.width - 32
-                spacing: 12
+                Morph {
+                    on: !card.hovered
+                    width: root.unit
+                    height: root.unit
 
-                // header
-                Item {
-                    width: parent.width
-                    height: 44
-
-                    // Soft halo behind the badge: grows a little with your voice, smoothly.
                     Rectangle {
-                        anchors.centerIn: badge
-                        width: 44
-                        height: 44
-                        radius: 22
-                        color: Theme.withAlpha(Theme.error, 0.22)
-                        visible: root.recording
-                        scale: 1 + root.voice * 0.32
-                        opacity: 0.25 + root.voice * 0.75
+                        anchors.fill: parent
+                        radius: width / 2
+                        color: Theme.withAlpha(Theme.primary, 0.12 + root.voice * 0.28)
+                        scale: 1 + root.voice * 0.1
+                        Behavior on color {
+                            ColorAnimation { duration: 160 }
+                        }
                         Behavior on scale {
                             NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
                         }
-                        Behavior on opacity {
-                            NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
-                        }
                     }
-
-                    Rectangle {
-                        id: badge
-                        width: 44
-                        height: 44
-                        radius: 22
-                        color: Theme.withAlpha(root.accent, 0.16)
-                        anchors.verticalCenter: parent.verticalCenter
-
-                        DIcon {
-                            anchors.centerIn: parent
-                            visible: !root.busy
-                            name: root.recording ? "mic" : root.phase === "error" ? "error" : root.phase === "done" ? (root.st.error ? "content_paste" : "check") : "mic"
-                            filled: true
-                            size: 24
-                            color: root.accent
-                        }
-
-                        DSpinner {
-                            anchors.centerIn: parent
-                            visible: root.busy
-                            running: root.busy
-                            size: 26
-                            color: Theme.primary
-                        }
-                    }
-
-                    Column {
-                        anchors.left: badge.right
-                        anchors.leftMargin: 12
-                        anchors.right: closeBtn.left
-                        anchors.rightMargin: 8
-                        anchors.verticalCenter: parent.verticalCenter
-                        spacing: 2
-
-                        StyledText {
-                            width: parent.width
-                            text: root.title
-                            color: Theme.surfaceText
-                            font.pixelSize: Theme.fontSizeLarge
-                            font.weight: Font.DemiBold
-                            elide: Text.ElideRight
-                        }
-
-                        StyledText {
-                            width: parent.width
-                            visible: text !== ""
-                            text: root.subtitle
-                            color: Theme.surfaceVariantText
-                            font.pixelSize: Theme.fontSizeSmall
-                            font.features: { "tnum": 1 }
-                            elide: Text.ElideRight
-                        }
-                    }
-
-                    Rectangle {
-                        id: closeBtn
-                        width: 32
-                        height: 32
-                        radius: 16
-                        anchors.right: parent.right
-                        anchors.verticalCenter: parent.verticalCenter
-                        color: closeArea.containsMouse ? Theme.withAlpha(Theme.surfaceText, 0.08) : "transparent"
-
-                        DIcon {
-                            anchors.centerIn: parent
-                            name: "close"
-                            size: 20
-                            color: Theme.surfaceVariantText
-                        }
-
-                        MouseArea {
-                            id: closeArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: root.run(["cancel"])
-                        }
+                    DIcon {
+                        anchors.centerIn: parent
+                        name: "mic"
+                        filled: true
+                        size: 18
+                        color: Theme.primary
                     }
                 }
 
-                // transcript / error text
+                Morph {
+                    on: !card.hovered
+                    width: timerText.implicitWidth
+                    height: root.unit
+                    StyledText {
+                        id: timerText
+                        anchors.verticalCenter: parent.verticalCenter
+                        text: root.clock(root.nowMs - (Number(root.st.started_ms) || root.nowMs))
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.features: { "tnum": 1 }
+                        color: Theme.surfaceVariantText
+                    }
+                }
+            }
+
+            // Mouse on it while talking: ✕ ✨ ✓ in the same spots.
+            Row {
+                id: acts
+                x: root.gap + 1
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.gap
+                visible: root.recording
+                enabled: card.hovered
+
+                Morph {
+                    on: card.hovered
+                    turn: -90
+                    width: root.unit
+                    height: root.unit
+                    RoundBtn {
+                        icon: "close"
+                        onClicked: root.run(["cancel"])
+                    }
+                }
+                Morph {
+                    on: card.hovered
+                    turn: -90
+                    width: root.unit
+                    height: root.unit
+                    RoundBtn {
+                        icon: "auto_awesome"
+                        hoverTint: Theme.primary
+                        onClicked: root.run(["stop", "luna"])
+                    }
+                }
+                Morph {
+                    on: card.hovered
+                    turn: -90
+                    width: root.unit
+                    height: root.unit
+                    RoundBtn {
+                        icon: "check"
+                        filled: true
+                        onClicked: root.run(["stop", "direct"])
+                    }
+                }
+            }
+
+            // Working or a problem.
+            Row {
+                id: info
+                x: root.gap + 1
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: root.gap
+                visible: !root.recording
+
+                Item {
+                    width: root.unit
+                    height: root.unit
+
+                    Rectangle {
+                        anchors.fill: parent
+                        radius: width / 2
+                        color: root.problem ? Theme.withAlpha(Theme.error, 0.14) : Theme.withAlpha(Theme.primary, 0.14)
+                    }
+                    DSpinner {
+                        anchors.fill: parent
+                        size: root.unit
+                        strokeWidth: 2
+                        color: Theme.primary
+                        visible: root.busy
+                        running: root.busy && root.shown
+                    }
+                    DIcon {
+                        anchors.centerIn: parent
+                        name: root.problem ? root.prob[0] : root.phase === "cleaning" ? "auto_awesome" : "mic"
+                        filled: true
+                        size: 18
+                        color: root.problem ? Theme.error : Theme.primary
+                    }
+                }
+
                 StyledText {
-                    width: parent.width
-                    visible: text !== ""
-                    text: root.bodyText
-                    color: root.phase === "error" ? Theme.error : root.phase === "recording" ? Theme.surfaceVariantText : Theme.surfaceText
-                    font.pixelSize: Theme.fontSizeMedium
-                    wrapMode: Text.WordWrap
-                    maximumLineCount: 5
-                    elide: Text.ElideRight
-                    lineHeight: 1.15
+                    visible: root.problem
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: root.prob[1] + (root.prob[2] ? " <font color=\"" + Theme.surfaceVariantText + "\">· " + root.prob[2] + "</font>" : "")
+                    textFormat: Text.StyledText
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
                 }
 
-                // actions
-                Row {
-                    anchors.right: parent.right
-                    spacing: 6
-                    visible: root.recording || root.busy || root.phase === "error"
+                RoundBtn {
+                    visible: root.problem && root.st.can_retry === true
+                    icon: "refresh"
+                    onClicked: root.run(["retry"])
+                }
 
-                    Btn {
-                        label: "Cancel"
-                        visible: root.recording || root.busy
-                        onClicked: root.run(["cancel"])
-                    }
-
-                    Btn {
-                        visible: root.recording
-                        kind: "tonal"
-                        icon: root.luna ? "notes" : "auto_awesome"
-                        label: root.luna ? "Raw" : "Clean up"
-                        onClicked: root.run(["stop", root.luna ? "direct" : "luna"])
-                    }
-
-                    Btn {
-                        visible: root.recording
-                        kind: "filled"
-                        icon: "stop"
-                        label: "Done"
-                        onClicked: root.run(["stop"])
-                    }
-
-                    Btn {
-                        visible: root.phase === "error"
-                        label: "Dismiss"
-                        onClicked: root.run(["cancel"])
-                    }
-
-                    Btn {
-                        visible: root.phase === "error" && root.st.can_retry === true
-                        kind: "filled"
-                        icon: "refresh"
-                        label: "Retry"
-                        onClicked: root.run(["retry"])
-                    }
+                RoundBtn {
+                    icon: "close"
+                    onClicked: root.run(["cancel"])
                 }
             }
         }

@@ -24,6 +24,5 @@ systemctl --user restart dictate.service
 dms ipc call plugins reload dictate >/dev/null 2>&1 || true
 
 [[ -s "$conf/dictate/api-key" ]] || echo "Now run: dictate set-key"
-echo "dictate installed. Bind keys in niri, e.g.:"
+echo "dictate installed. Bind a key in niri, e.g.:"
 echo '  Mod+B { spawn "dictate" "toggle" "direct"; }'
-echo '  Mod+G { spawn "dictate" "toggle" "luna"; }'

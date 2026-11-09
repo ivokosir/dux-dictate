@@ -1,0 +1,598 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Dictate playground</title>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,400,0..1,0&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0b1011; --panel: #111819; --surf: #1a2121; --surf-hi: #252b2b; --text: #dde4e3; --muted: #bec8c8; --dim: #8a9696;
+    --primary: #80d4d6; --on-primary: #003738; --tonal: #324b4b; --on-tonal: #cce8e8;
+    --err: #ffb4ab; --outline: #3f4949; --success: #8fd99a;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 Inter, system-ui, sans-serif; padding: 24px 16px 60px; }
+  main { max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 36px 0 6px; }
+  p.note { color: var(--muted); margin: 0 0 14px; }
+  kbd { background: var(--surf-hi); border: 1px solid var(--outline); border-radius: 5px; padding: 0 5px; font: 12px Inter, sans-serif; }
+  .ms { font-family: "Material Symbols Rounded"; font-variation-settings: "FILL" 1; font-size: 18px; line-height: 1; user-select: none; }
+  .ms.o { font-variation-settings: "FILL" 0; }
+
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 16px; align-items: start; }
+  @media (max-width: 900px) { .layout { grid-template-columns: 1fr; } }
+
+  /* ---------- controls ---------- */
+  .controls { background: var(--panel); border: 1px solid var(--outline); border-radius: 16px; padding: 12px 14px; position: sticky; top: 12px; }
+  .controls h4 { margin: 12px 0 6px; font-size: 11.5px; color: var(--dim); text-transform: uppercase; letter-spacing: .05em; font-weight: 600; }
+  .controls h4:first-child { margin-top: 0; }
+  .ctl { display: flex; align-items: center; justify-content: space-between; gap: 8px; margin: 6px 0; font-size: 13px; color: var(--muted); }
+  .seg { display: inline-flex; background: var(--surf); border: 1px solid var(--outline); border-radius: 10px; padding: 2px; gap: 2px; flex-wrap: wrap; }
+  .seg button { border: 0; background: transparent; color: var(--muted); font: 12.5px Inter, sans-serif; padding: 4px 9px; border-radius: 8px; cursor: pointer; }
+  .seg button.on { background: var(--primary); color: var(--on-primary); font-weight: 500; }
+  .seg button:hover:not(.on) { background: rgba(221,228,227,.08); }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .chips button { border: 1px solid var(--outline); background: var(--surf); color: var(--muted); font: 12px Inter, sans-serif; padding: 4px 9px; border-radius: 14px; cursor: pointer; }
+  .chips button.on { border-color: var(--primary); color: var(--primary); background: rgba(128,212,214,.1); }
+  .act { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 4px; }
+  .act button { border: 1px solid var(--outline); background: var(--surf-hi); color: var(--text); font: 12.5px Inter, sans-serif; padding: 6px 10px; border-radius: 10px; cursor: pointer; }
+  .help { font-size: 12px; color: var(--dim); margin-top: 10px; line-height: 1.5; }
+
+  /* ---------- stage ---------- */
+  .stage { position: relative; height: 560px; border-radius: 14px; overflow: hidden; border: 1px solid var(--outline);
+    background: radial-gradient(120% 140% at 10% 100%, #1d3a3b 0%, #0f1a1b 55%, #0a0f10 100%); }
+  .bar { height: 32px; background: rgba(14,20,21,.94); display: flex; align-items: center; justify-content: flex-end; gap: 16px; padding: 0 14px; color: var(--muted); font-size: 12.5px; }
+  .barbtn { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 26px; border-radius: 13px; color: var(--muted); cursor: pointer; transition: background .15s, color .15s; }
+  .barbtn:hover { background: rgba(221,228,227,.08); }
+  .barbtn.rec { color: var(--primary); background: rgba(128,212,214,.16); }
+  .barbtn.busy { color: var(--primary); opacity: .55; }
+  .barbtn.err { color: var(--err); }
+  .barbtn.open { box-shadow: inset 0 0 0 1px rgba(221,228,227,.25); }
+  .barbtn .ms { font-size: 18px; }
+  .window { position: absolute; left: 18px; top: 52px; width: 46%; height: 150px; border-radius: 10px; background: rgba(37,43,43,.55); padding: 12px 14px; font-size: 12.5px; color: var(--muted); }
+  .window .typed { color: var(--text); }
+  .caret { display: inline-block; width: 1px; height: 14px; background: var(--text); vertical-align: middle; animation: blink 1s steps(1) infinite; }
+  @keyframes blink { 50% { opacity: 0; } }
+  .cardslot { position: absolute; top: 42px; right: 12px; }
+
+  /* ---------- the card ---------- */
+  .card { --h: 44px; --b: 32px; display: inline-flex; align-items: center; gap: 6px; height: var(--h); padding: calc((var(--h) - var(--b)) / 2);
+    background: var(--surf); border-radius: calc(var(--h) / 2); border: 1px solid rgba(63,73,73,.55);
+    box-shadow: 0 1px 2px rgba(0,0,0,.35), 0 8px 24px rgba(0,0,0,.4); white-space: nowrap; animation: pop .18s ease-out; }
+  .card.s { --h: 38px; --b: 28px; gap: 4px; }
+  .card.soft { border-radius: 14px; }
+  .card.s.soft { border-radius: 12px; }
+  @keyframes pop { from { opacity: 0; transform: translateY(-8px); } }
+  .badge { position: relative; width: var(--b); height: var(--b); border-radius: 50%; display: grid; place-items: center; color: var(--primary); background: rgba(128,212,214,.14); flex: none; }
+  .badge .ms { position: relative; }
+  .glow-fill .badge.voice { animation: vfill 2.4s ease-in-out infinite; }
+  @keyframes vfill { 0%,100% { background: rgba(128,212,214,.12); transform: scale(1) } 20% { background: rgba(128,212,214,.34); transform: scale(1.08) } 35% { background: rgba(128,212,214,.22); transform: scale(1.03) } 55% { background: rgba(128,212,214,.4); transform: scale(1.1) } 75% { background: rgba(128,212,214,.15); transform: scale(1) } }
+  .glow-ring .badge.voice { animation: vring 2.4s ease-in-out infinite; }
+  @keyframes vring { 0%,100% { box-shadow: 0 0 0 0 rgba(128,212,214,.4) } 20% { box-shadow: 0 0 0 3px rgba(128,212,214,.45) } 35% { box-shadow: 0 0 0 1.5px rgba(128,212,214,.4) } 55% { box-shadow: 0 0 0 4px rgba(128,212,214,.5) } 75% { box-shadow: 0 0 0 .5px rgba(128,212,214,.35) } }
+  .glow-icon .badge.voice .ms { animation: vicon 2.4s ease-in-out infinite; }
+  @keyframes vicon { 0%,100% { opacity: .55 } 20% { opacity: 1 } 35% { opacity: .75 } 55% { opacity: 1 } 75% { opacity: .6 } }
+  .badge .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--primary); border-right-color: rgba(128,212,214,.35); animation: spin .9s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg) } }
+  .badge.bad { color: var(--err); background: rgba(255,180,171,.14); }
+  .badge.neutral { color: var(--muted); background: rgba(221,228,227,.08); }
+  .t { font-variant-numeric: tabular-nums; font-size: 13px; color: var(--muted); }
+  /* ---- hover ideas ---- */
+  .hwrap { display: inline-block; padding: 4px; margin: -4px; }
+  .hcard { position: relative; overflow: hidden; transition: width .22s cubic-bezier(.2,.8,.2,1); }
+  .hcard { width: var(--rw, 92px); }
+  .hwrap:hover .hcard, .hwrap.hov .hcard { width: var(--hw, 122px); }
+  .hcard .face { position: absolute; inset: 0; padding: 0 calc((var(--h) - var(--b)) / 2); display: flex; align-items: center; justify-content: flex-start; gap: 6px; transition: transform .26s cubic-bezier(.2,.8,.2,1), opacity .2s; }
+  .hcard.h1 .face.acts { transform: translateY(110%); opacity: 0; pointer-events: none; }
+  .hwrap:hover .hcard.h1 .face.rest, .hwrap.hov .hcard.h1 .face.rest { transform: translateY(-110%); opacity: 0; pointer-events: none; }
+  .hwrap:hover .hcard.h1 .face.acts, .hwrap.hov .hcard.h1 .face.acts { transform: none; opacity: 1; pointer-events: auto; }
+  .hcard.h2 { overflow: visible; transition: width .3s ease, transform .42s cubic-bezier(.3,1.3,.5,1); transform-style: preserve-3d; }
+  .hwrap:hover .hcard.h2, .hwrap.hov .hcard.h2 { transform: perspective(300px) rotateX(180deg); }
+  .hcard.h2 .face { backface-visibility: hidden; transition: none; }
+  .hcard.h2 .face.acts { transform: rotateX(180deg); pointer-events: none; }
+  .hwrap:hover .hcard.h2 .face.acts, .hwrap.hov .hcard.h2 .face.acts { pointer-events: auto; }
+  .hwrap:hover .hcard.h2 .face.rest, .hwrap.hov .hcard.h2 .face.rest { pointer-events: none; }
+  /* morph: the mic spins away into ✕, the timer melts into ✨ ✓ (same spots, two plain rows) */
+  .hcard.h3 .face, .hcard.h4 .face { transition: opacity .2s ease; }
+  .hcard.h3 .face > *, .hcard.h4 .face > * { transition: transform .26s cubic-bezier(.2,.8,.2,1), opacity .2s ease; }
+  .hcard.h3 .face.acts, .hcard.h4 .face.acts { opacity: 0; pointer-events: none; }
+  .hcard.h3 .face.acts > * { transform: rotate(-90deg) scale(.5); }
+  .hwrap:hover .hcard.h3 .face.rest > *, .hwrap.hov .hcard.h3 .face.rest > * { transform: rotate(90deg) scale(.5); }
+  .hcard.h4 .face.acts > * { transform: scale(.92); }
+  .hwrap:hover .hcard.h4 .face.rest > *, .hwrap.hov .hcard.h4 .face.rest > * { transform: scale(.92); }
+  .hwrap:hover .hcard.h3 .face.rest, .hwrap.hov .hcard.h3 .face.rest, .hwrap:hover .hcard.h4 .face.rest, .hwrap.hov .hcard.h4 .face.rest { opacity: 0; pointer-events: none; }
+  .hwrap:hover .hcard.h3 .face.acts, .hwrap.hov .hcard.h3 .face.acts, .hwrap:hover .hcard.h4 .face.acts, .hwrap.hov .hcard.h4 .face.acts { opacity: 1; pointer-events: auto; }
+  .hwrap:hover .hcard .face.acts > *, .hwrap.hov .hcard .face.acts > * { transform: none; }
+  .hcard .badge.voice { animation-name: vfill; }
+  .tip { position: absolute; z-index: 20; background: #2b3232; color: var(--text); font: 400 12px/1.2 Inter, sans-serif; white-space: nowrap; padding: 6px 9px;
+    border-radius: 8px; box-shadow: 0 4px 12px rgba(0,0,0,.4); pointer-events: none; opacity: 0; transform: translateY(3px); transition: opacity .12s, transform .12s; }
+  .tip.show { opacity: 1; transform: none; }
+  .sep { width: 1px; height: 18px; background: var(--outline); margin: 0 1px; }
+  .ib { width: var(--b); height: var(--b); border-radius: 50%; display: grid; place-items: center; color: var(--muted); cursor: pointer; flex: none; }
+  .ib:hover { background: rgba(221,228,227,.08); color: var(--text); }
+  .btn { width: var(--b); height: var(--b); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex: none; }
+  .btn.ghost { color: var(--muted); } .btn.ghost:hover { background: rgba(221,228,227,.08); color: var(--text); }
+  .btn.ghost.clean:hover { color: var(--primary); background: rgba(128,212,214,.1); }
+  .btn.tonal { background: var(--tonal); color: var(--on-tonal); }
+  .btn.filled { background: var(--primary); color: var(--on-primary); }
+  .btn.tonal:hover, .btn.filled:hover { filter: brightness(1.15); }
+  .grp > div.ghost { background: transparent !important; color: var(--muted) !important; }
+  .grp > div.ghost:hover { background: rgba(221,228,227,.08) !important; filter: none; }
+  .grp > div.tonal { background: var(--tonal) !important; color: var(--on-tonal) !important; }
+  .grp > div.filled { background: var(--primary) !important; color: var(--on-primary) !important; }
+  .ib.clean:hover { color: var(--primary); background: rgba(128,212,214,.1); }
+  .grp { display: flex; gap: 2px; }
+  .grp > div { width: calc(var(--b) + 6px); height: var(--b); display: grid; place-items: center; cursor: pointer; }
+  .grp > div:first-child { border-radius: 16px 6px 6px 16px; background: var(--tonal); color: var(--on-tonal); }
+  .grp > div:last-child { border-radius: 6px 16px 16px 6px; background: var(--primary); color: var(--on-primary); }
+  .grp > div:hover, .fab:hover { filter: brightness(1.15); }
+  .fab { width: var(--b); height: var(--b); border-radius: 50%; display: grid; place-items: center; cursor: pointer; flex: none; background: var(--primary); color: var(--on-primary); position: relative; }
+  .fab .ms { transition: transform .2s ease; }
+  .fab.flipped .ms { transform: rotate(360deg); }
+  .fab.wide { width: auto; border-radius: calc(var(--b) / 2); padding: 0 12px 0 9px; gap: 5px; display: inline-flex; font-weight: 500; font-size: 13px; }
+  .msg { font-size: 13px; color: var(--text); }
+  .msg small { color: var(--dim); font-size: 12px; }
+  .card.bad { border-color: rgba(255,180,171,.3); }
+  .card .ms { font-size: 18px; }
+  .card.s .ms { font-size: 16px; }
+
+  /* ---------- popout ---------- */
+  .popout { position: absolute; top: 40px; right: 46px; width: min(400px, calc(100% - 16px)); background: var(--surf); border-radius: 18px; border: 1px solid rgba(63,73,73,.55); box-shadow: 0 10px 30px rgba(0,0,0,.5); padding: 10px 8px; animation: pop .16s ease-out; }
+  .phead { display: flex; align-items: center; gap: 10px; padding: 0 4px 0 6px; height: 44px; }
+  .pico { width: 40px; height: 40px; border-radius: 50%; background: var(--surf-hi); display: grid; place-items: center; color: var(--muted); flex: none; }
+  .pico .ms { font-size: 22px; }
+  .pico.rec { background: rgba(128,212,214,.18); color: var(--primary); animation: vfill 2.4s ease-in-out infinite; }
+  .ptitle { flex: 1; min-width: 0; font-size: 16px; font-weight: 500; display: flex; align-items: baseline; gap: 8px; }
+  .ptitle .pt { font-size: 13px; color: var(--primary); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .live { display: inline-flex; align-items: center; gap: 7px; color: var(--muted); font-size: 13px; cursor: pointer; padding: 4px 4px 4px 8px; border-radius: 16px; }
+  .live:hover { background: rgba(221,228,227,.05); }
+  .liveic { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--muted); cursor: pointer; }
+  .liveic:hover { background: rgba(221,228,227,.08); }
+  .liveic.on { background: rgba(128,212,214,.16); color: var(--primary); }
+  .livechip { display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 16px 0 12px; border-radius: 18px; border: 0; background: transparent; color: var(--muted); font-size: 14px; font-weight: 500; cursor: pointer; transition: all .15s; }
+  .locked { opacity: .38; cursor: default !important; pointer-events: auto; }
+  .locked:hover { background: transparent !important; }
+  .livechip:hover { background: rgba(221,228,227,.08); }
+  .livechip.on { color: var(--primary); }
+  .livechip.on:hover { background: rgba(128,212,214,.1); }
+  .livechip .ms { font-size: 18px; }
+  details.decided summary { list-style: none; cursor: pointer; }
+  details.decided summary::-webkit-details-marker { display: none; }
+  details.decided summary span { display: block; font-size: 12px; color: var(--primary); margin: -2px 0 4px; }
+  details.decided[open] summary span { color: var(--dim); }
+  .sw { width: 38px; height: 22px; border-radius: 11px; background: var(--surf-hi); border: 2px solid var(--outline); position: relative; flex: none; transition: background .15s; }
+  .sw::after { content: ""; position: absolute; top: 3px; left: 3px; width: 12px; height: 12px; border-radius: 50%; background: var(--dim); transition: all .15s; }
+  .sw.on { background: var(--primary); border-color: var(--primary); }
+  .sw.on::after { left: 17px; top: 1px; width: 16px; height: 16px; background: var(--on-primary); }
+  .pbtn { height: 36px; border-radius: 18px; padding: 0 16px 0 12px; display: inline-flex; align-items: center; gap: 6px; font-weight: 500; cursor: pointer; flex: none; background: var(--primary); color: var(--on-primary); }
+  .pbtn:hover { filter: brightness(1.1); }
+  .pbusy { position: relative; width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; color: var(--primary); background: rgba(128,212,214,.14); flex: none; }
+  .pbusy .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--primary); border-right-color: rgba(128,212,214,.35); animation: spin .9s linear infinite; }
+  .pbusy .ms { position: relative; }
+  .psep { display: flex; gap: 6px; }
+  .pico { position: relative; }
+  .pico.busy { color: var(--primary); background: rgba(128,212,214,.14); }
+  .pico .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--primary); border-right-color: rgba(128,212,214,.35); animation: spin .9s linear infinite; }
+  .pico .ms { position: relative; }
+  .pbtn.ghostbtn { background: transparent; color: var(--muted); }
+  .pbtn.ghostbtn:hover { background: rgba(221,228,227,.08); color: var(--text); filter: none; }
+  .pslot { width: 92px; display: flex; justify-content: flex-end; flex: none; }
+  .pslot .pbtn { width: 100%; justify-content: center; padding: 0; }
+  .pprob { color: var(--err); font-size: 15px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .pprob.soft { color: var(--text); }
+  .pico.bad { background: rgba(255,180,171,.14); color: var(--err); }
+  .pico.soft { background: rgba(221,228,227,.08); color: var(--muted); }
+  .pbtn.off { opacity: .38; cursor: default; filter: none; }
+  .pstrip { display: flex; align-items: center; gap: 10px; margin: 8px 4px 0; padding: 6px 4px 6px 12px; border-radius: 12px; background: rgba(255,180,171,.1); color: var(--err); }
+  .pstrip.soft { background: rgba(221,228,227,.05); color: var(--muted); }
+  .pstrip > div:first-of-type { flex: 1; min-width: 0; }
+  .pstrip b { display: block; font-weight: 500; font-size: 13.5px; color: var(--text); }
+  .pstrip small { display: block; font-size: 12px; color: var(--dim); }
+  .pico.calm { animation: none; }
+  .popgal { display: grid; grid-template-columns: repeat(auto-fill, minmax(400px, 1fr)); gap: 14px; }
+  .popgal .cell label { display: block; color: var(--muted); font-size: 12px; margin: 6px 4px 0; }
+  .popout.still { position: static; width: 400px; max-width: 100%; animation: none; pointer-events: none; }
+  .barbtn.down { color: var(--dim); } .pgrp { display: flex; gap: 2px; }
+  .pb { height: 36px; display: inline-flex; align-items: center; justify-content: center; gap: 6px; cursor: pointer; font-weight: 500; flex: none; }
+  .pb.ico { width: 36px; } .pb.word { padding: 0 16px 0 12px; }
+  .pb.ghost { color: var(--muted); } .pb.ghost:hover { background: rgba(221,228,227,.08); color: var(--text); }
+  .pb.tonal { background: var(--tonal); color: var(--on-tonal); }
+  .pb.filled { background: var(--primary); color: var(--on-primary); }
+  .pb.tonal:hover, .pb.filled:hover { filter: brightness(1.12); }
+  .pb.round { border-radius: 18px; }
+  .pgrp .pb:first-child { border-radius: 18px 6px 6px 18px; } .pgrp .pb:last-child { border-radius: 6px 18px 18px 6px; }
+  .pgrp .pb.ico:first-child { width: 40px; } .pgrp .pb.ico:last-child { width: 40px; }
+  .pb.word { padding: 0 18px; }
+  .pbtn.tonal { background: var(--tonal); color: var(--on-tonal); }
+  .ptitle .pt.big { font-size: 16px; font-weight: 500; color: var(--text); }
+  .divider { height: 1px; background: rgba(63,73,73,.6); margin: 10px 6px 6px; }
+  .rechead { display: flex; align-items: center; height: 32px; padding: 0 4px 0 8px; color: var(--muted); font-weight: 500; position: relative; }
+  .rechead .sp { flex: 1; }
+  .rechead.confirm { gap: 8px; color: var(--text); font-weight: 500; padding-right: 2px; animation: pop .15s ease-out; }
+  .rechead.confirm .ms { font-size: 18px; }
+  .mini { height: 28px; padding: 0 12px; border-radius: 14px; border: 0; background: transparent; color: var(--muted); font: 500 13px Inter, sans-serif; cursor: pointer; }
+  .mini:hover { background: rgba(221,228,227,.08); }
+  .mini.danger { background: rgba(255,180,171,.16); color: var(--err); }
+  .mini.danger:hover { background: rgba(255,180,171,.26); }
+  .toast { position: absolute; left: 50%; transform: translateX(-50%); display: inline-flex; gap: 6px; align-items: center; height: 26px; padding: 0 14px; border-radius: 13px; background: rgba(143,217,154,.15); font-size: 12px; color: var(--text); font-weight: 400; transition: opacity .15s; }
+  .toast .ms { color: var(--success); font-size: 16px; }
+  .list { max-height: 300px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--outline) transparent; }
+  .row { --b: 30px; display: flex; align-items: center; gap: 12px; height: 54px; padding: 0 4px 0 8px; border-radius: 12px; cursor: pointer; }
+  .row:hover { background: rgba(221,228,227,.05); }
+  .row.new { animation: pop .3s ease-out; }
+  .ricon { width: 36px; height: 36px; border-radius: 50%; background: var(--surf-hi); display: grid; place-items: center; color: var(--muted); flex: none; }
+  .rtext { flex: 1; min-width: 0; }
+  .rtext b { display: block; font-weight: 400; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .rtext small { color: var(--dim); font-size: 12px; font-variant-numeric: tabular-nums; }
+  .acts { display: none; }
+  .acts.always { display: flex; }
+  .row.audio { cursor: default; }
+  .rtext b.miss { color: var(--dim); font-style: italic; }
+  .ricon { position: relative; }
+  .ricon.miss { color: var(--err); background: rgba(255,180,171,.1); }
+  .ricon.busy { color: var(--primary); background: rgba(128,212,214,.14); }
+  .ricon .ring { position: absolute; inset: 0; border-radius: 50%; border: 2px solid transparent; border-top-color: var(--primary); border-right-color: rgba(128,212,214,.35); animation: spin .9s linear infinite; }
+  .ricon .ms { position: relative; }
+  .row:hover .acts { display: flex; }
+  .more { display: block; width: calc(100% - 8px); margin: 4px 4px 0; height: 34px; border: 0; border-radius: 12px; background: transparent; color: var(--primary); font: 500 13px Inter, sans-serif; cursor: pointer; }
+  .more:hover { background: rgba(128,212,214,.08); }
+  .pempty { color: var(--dim); font-size: 13px; padding: 4px 10px 8px; }
+
+  /* ---------- gallery ---------- */
+  .gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(250px, 1fr)); gap: 10px; }
+  .gcell { background: var(--panel); border: 1px solid var(--outline); border-radius: 14px; padding: 16px 12px 10px; display: flex; flex-direction: column; align-items: flex-start; gap: 10px; min-height: 88px; }
+  .gcell .card { animation: none; pointer-events: none; }
+  .gcell label { color: var(--muted); font-size: 12px; }
+  .gone { color: var(--dim); font-size: 12.5px; font-style: italic; height: 44px; display: flex; align-items: center; }
+
+  .answers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+  .answers div { background: var(--panel); border: 1px solid var(--outline); border-radius: 12px; padding: 10px 12px; color: var(--muted); font-size: 13px; }
+  .answers b { color: var(--text); display: block; margin-bottom: 2px; font-weight: 600; }
+  code { font-size: 12px; color: var(--on-tonal); }
+</style>
+</head>
+<body>
+<main>
+  <h1>Dictate playground</h1>
+  <p class="note">Flip the switches on the right and use it like the real thing. Bar mic: <b>click</b> = popout, <b>right-click</b> = start/stop. <kbd>B</kbd> on your keyboard = Mod+B.</p>
+
+  <div class="layout">
+    <div>
+      <div class="stage" id="stage">
+        <div class="bar"><span>wifi</span><span class="barbtn" id="barmic" title="Click: open · Right-click: start/stop"><span class="ms o">mic</span></span><span>14:32</span></div>
+        <div class="window">Slack · #design<br><br><span class="typed" id="typed">Sure, I can look at it </span><span class="caret"></span></div>
+        <div class="cardslot" id="cardslot"></div>
+        <div id="popslot"></div>
+      </div>
+    </div>
+
+    <aside class="controls" id="controls">
+      <h4>Card</h4>
+      <p class="help" style="margin:0 0 4px;color:var(--primary)">Picked: hover morph · ✕ ✨ ✓ separate · ✨ ghost · ✓ filled</p>
+      <p id="hhelp" hidden></p>
+
+      <h4>Jump to a state</h4>
+      <div class="chips" data-k="state">
+        <button data-v="idle">Idle</button><button data-v="talking">Talking</button><button data-v="quiet">Quiet</button><button data-v="long">Talking 10 h</button><button data-v="working">Working</button><button data-v="cleaning">Cleaning up</button><button data-v="cleanfail">Clean-up failed</button><button data-v="clipboard">On clipboard</button><button data-v="nospeech">No speech</button><button data-v="mic">Mic problem</button><button data-v="eleven">ElevenLabs failed</button><button data-v="nokey">No key</button><button data-v="down">Service down</button>
+      </div>
+
+      <h4>Popout</h4>
+      <div class="act"><button id="openPop">Open popout</button><button id="modb">Mod+B</button></div>
+
+    </aside>
+  </div>
+
+  <h2>Every card state</h2>
+  <div class="gallery" id="gallery"></div>
+
+  <h2>Every popout state</h2>
+  <p class="note">Problems show as a strip under the header. Start, ✨ ✓ and the spinner all sit in the same spot, so the top row never jumps.</p>
+  <div class="popgal" id="popgal"></div>
+
+  <h2>What we picked</h2>
+  <div class="answers">
+    <div><b>Card (top right)</b>Resting: glowing mic + timer, one pill. Mouse on it: morphs into ✕ ✨ ✓ (✨ ghost, ✓ filled, 6 px gaps). No title, no text. Gone when done.</div>
+    <div><b>Card problems</b>Red pill with icon + short text + ✕. Clean-up failed (6 s), couldn't paste (8 s), no speech (3 s). Mic, ElevenLabs (with ⟳), no key: stay until ✕.</div>
+    <div><b>Bar mic</b>No timer, fixed size. Fills teal while talking. Click = popout, right-click = start/stop. Only Mod+B (Mod+G goes away).</div>
+    <div><b>Popout</b>One row: mic · Dictate (+ timer while talking) · ⚡ · fixed slot (Start / ✨ ✓ / Cancel / Retry). While working, the left icon spins. Nothing moves between states. Card hides while it's open.</div>
+    <div><b>Popout finish</b>Start keeps it open. ✨ / ✓ there copy to the clipboard (no paste) and stay open; the new text lands on top of Recent with "Copied".</div>
+    <div><b>Live</b>⚡ icon only, ghost, with tooltip. Locked while talking or working.</div>
+    <div><b>Recent = just files</b>No app database. <code>~/Music/Dictations/</code> holds <code>&lt;time&gt;.ogg</code>, <code>.txt</code> and <code>.clean.txt</code>. The list reads the folder (last 20, 5 shown + "Show more").</div>
+    <div><b>What a row offers</b>Only audio → "Not transcribed" + ⟳ Transcribe. Every transcribed row has the same buttons: ✨ (clean up, or copy cleaned once it exists) and 📋 copy raw. The row's icon (📝 vs ✨) tells you which kind it is. Not transcribed → ⟳. Row click copies the best text. Always: folder, delete (to trash). 🧹 delete all asks first.</div>
+    <div><b>No time limit</b>Talk as long as you like; audio is saved as you go.</div>
+  </div>
+</main>
+
+<script>
+const S = {
+  layout: "h3", busySlot: "cancel", popGroup: "sep", popClean: "ghost", grouping: "sep", cleanStyle: "ghost", doneStyle: "filled", timer: "1", divider: "1", glow: "fill", shape: "pill", size: "m", fabWide: "0",
+  state: "idle", liveCtl: "icon", recHead: "steady", delAll: "1", confirmClear: false,
+  flip: "done", popOpen: false, live: false, startedAt: Date.now() - 12000, showAll: false, toast: "", lastClean: false,
+};
+const words = ["Let's move the standup to 10:30 tomorrow.", "Thanks, that works for me.", "Can you check if the invoice went out on Friday?",
+  "okay so the plan is we first fix the socket thing and then", "Hi Marko, quick update on the project timeline", "Sure, send me the link after lunch.",
+  "I'll be five minutes late.", "Ship it on Friday after the review.", "Remind me to call the bank.", "What time is the dentist?", "Looks good to me, merging now.",
+  "Can we push this to next week?", "Draft: thank you for the quick reply", "The build is green again.", "Let's grab lunch at noon.",
+  "Note to self: renew the domain", "Yes, the doc is in the shared folder.", "Ping me when you're back.", "Great talk today!", "Agenda: budget, hiring, roadmap"];
+const times = ["Today 14:31", "Today 13:02", "Today 11:47", "Yesterday 18:20", "8 Nov 09:12", "7 Nov 16:40", "7 Nov 10:03", "6 Nov 19:55", "6 Nov 12:30", "5 Nov 08:41",
+  "4 Nov 17:12", "4 Nov 09:58", "3 Nov 15:20", "2 Nov 11:11", "1 Nov 20:05", "31 Oct 09:30", "30 Oct 14:44", "29 Oct 18:02", "28 Oct 10:10", "27 Oct 16:16"];
+// Recent = the files in ~/Music/Dictations. What exists decides what a row can do:
+//   <stamp>.ogg only                    -> "audio": transcription failed, offer Transcribe
+//   <stamp>.ogg + .txt                  -> "raw":   offer ✨ clean up
+//   <stamp>.ogg + .txt + .clean.txt     -> "clean": done
+let recent = words.map((w, i) => ({ text: w, when: times[i], len: `0:${String(4 + (i * 7) % 50).padStart(2, "0")}`,
+  stage: i === 2 ? "audio" : i % 4 === 1 ? "clean" : "raw" }));
+const stamp = r => r.stamp || "2026-11-09_14-31-02";
+
+const $ = s => document.querySelector(s);
+const clock = ms => { const s = Math.max(0, Math.floor(ms / 1000)); const h = Math.floor(s / 3600), m = Math.floor(s / 60) % 60, x = s % 60;
+  return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(x).padStart(2, "0"); };
+const ic = (n, o) => `<span class="ms${o ? " o" : ""}">${n}</span>`;
+const talkingish = st => st === "talking" || st === "quiet";
+
+// ✨ is a ghost button like ✕; ✓ is the one filled button.
+const actions = () => {
+  const c = `data-act="clean" title="Clean up, then paste"`, d = `data-act="done" title="Paste"`;
+  if (S.grouping === "grp") return `<div class="grp st-${S.cleanStyle}-${S.doneStyle}"><div class="${S.cleanStyle}" ${c}>${ic("auto_awesome")}</div><div class="${S.doneStyle}" ${d}>${ic("check")}</div></div>`;
+  return `<div class="btn ${S.cleanStyle} clean" ${c}>${ic("auto_awesome")}</div><div class="btn ${S.doneStyle}" ${d}>${ic("check")}</div>`;
+};
+function card(st, o, timeText) {
+  if (st === "idle" || st === "down") return ""; // service down: no card, the bar mic shows it
+  const cls = ["card", "glow-" + o.glow, o.size === "s" ? "s" : "", o.shape === "soft" ? "soft" : ""];
+  const close = `<div class="ib" data-act="cancel" title="Throw away">${ic("close")}</div>`;
+  const sep = o.divider === "1" ? `<div class="sep"></div>` : "";
+  let inner = "";
+  if (talkingish(st) && /^h/.test(o.layout)) {
+    const badge = `<div class="badge${st === "talking" ? " voice" : ""}">${ic("mic")}</div>`;
+    const t = `<span class="t">${timeText}</span>`;
+    const grp = actions();
+    let body;
+    body = `<div class="face rest">${badge}${t}</div><div class="face acts">${close}${grp}</div>`;
+    const rw = Math.round(32 + 6 + timeText.length * 7.6 + 8 + 12 + 2 + 5);
+    return `<div class="hwrap${o.forceHover ? " hov" : ""}"><div class="${cls.join(" ")} hcard ${o.layout}" style="--rw:${rw}px;--hw:${S.grouping === "grp" ? 132 : 124}px">${body}</div></div>`;
+  }
+  if (talkingish(st)) {
+    const timer = o.timer === "1" ? `<span class="t">${timeText}</span>` : "";
+    let action;
+    if (o.layout === "b1") {
+      action = actions();
+    } else {
+      const isClean = o.flip === "clean";
+      const word = o.fabWide === "1" ? (isClean ? "Clean" : "Paste") : "";
+      action = `<div class="fab${word ? " wide" : ""}${isClean ? " flipped" : ""}" data-act="confirm" title="Click: ${isClean ? "clean up + paste" : "paste"} · Right-click: switch">${ic(isClean ? "auto_awesome" : "check")}${word}</div>`;
+    }
+    inner = `<div class="badge${st === "talking" ? " voice" : ""}">${ic("mic")}</div>${timer}${sep}${close}${action}`;
+  } else if (st === "working" || st === "cleaning") {
+    inner = `<div class="badge"><div class="ring"></div>${ic(st === "working" ? "mic" : "auto_awesome")}</div>${close}`;
+  } else {
+    const P = {
+      cleanfail: ["bad", "auto_awesome", `Clean-up failed <small>· pasted raw</small>`, false],
+      clipboard: ["bad", "content_paste", `Couldn't paste <small>· on clipboard</small>`, false],
+      nospeech: ["bad", "voice_over_off", "No speech heard", false],
+      mic: ["bad", "mic_off", "Mic not working", false],
+      eleven: ["bad", "cloud_off", "Didn't go through", true],
+      nokey: ["bad", "key_off", "No ElevenLabs key", false],
+    }[st];
+    if (P[0] === "bad") cls.push("bad");
+    inner = `<div class="badge ${P[0]}">${ic(P[1])}</div><span class="msg">${P[2]}</span>${P[3] ? `<div class="ib" data-act="retry" title="Try again">${ic("refresh")}</div>` : ""}${close}`;
+  }
+  return `<div class="${cls.join(" ")}">${inner}</div>`;
+}
+
+// While talking the popout offers the same two ways to finish as the card: ✨ clean up, ✓ paste.
+function popActions() {
+  const word = false; // ✓ is just the icon
+  const c = `data-act="clean" title="Clean up, then paste"`, d = `data-act="done" title="Paste"`;
+  const clean = `${ic("auto_awesome")}`, done = ic("check");
+  if (S.popGroup === "grp")
+    return `<div class="pgrp"><div class="pb ${S.popClean} ico" ${c}>${clean}</div><div class="pb ${S.doneStyle}${word ? " word" : " ico"}" ${d}>${done}</div></div>`;
+  return `<div class="psep"><div class="pb ${S.popClean} ico round" ${c}>${clean}</div><div class="pb ${S.doneStyle}${word ? " word round" : " ico round"}" ${d}>${done}</div></div>`;
+}
+// Problems shown inside the popout: a strip under the header (same words as the card).
+// [icon, title text, tooltip hint, can retry, soft (not red)]
+const PROBLEMS = {
+  cleanfail: ["auto_awesome", "Clean-up failed", "Raw text copied instead", false],
+  clipboard: ["content_paste", "Couldn't paste", "It's on your clipboard", false],
+  nospeech: ["voice_over_off", "No speech heard", "", false],
+  mic: ["mic_off", "Mic not working", "Check the input device", false],
+  eleven: ["cloud_off", "Didn't go through", "Audio is saved, Retry sends it again", true],
+  nokey: ["key_off", "No ElevenLabs key", "Run: dictate set-key", false],
+  down: ["mic_off", "Service not running", "systemctl --user start dictate", false],
+};
+function popoutHTML(st, g) {
+  // g = gallery copy: static, short list, no live clock.
+  const rec = talkingish(st), busy = st === "working" || st === "cleaning", down = st === "down";
+  const since = g ? (st === "long" ? "10:03:12" : "0:12") : clock(Date.now() - S.startedAt);
+  // While talking, Live is locked: the take already started in one mode.
+  const locked = rec || busy || down;
+  const lockTip = down ? "Service not running" : locked ? "Can't change while talking" : `Live transcription: ${S.live ? "on" : "off"}`;
+  const live = `<span class="liveic${S.live ? " on" : ""}${locked ? " locked" : ""}"${locked ? "" : ` data-act="live"`} title="${lockTip}">${ic("bolt")}</span>`;
+  // Problems take the title spot (no extra row), so nothing below moves.
+  const P = PROBLEMS[st];
+  const title = P ? `<span class="pprob${P[4] ? " soft" : ""}"${P[2] ? ` title="${P[2]}"` : ""}>${P[1]}</span>`
+    : rec ? `Dictate <span class="pt"${g ? "" : " data-clock"}>${since}</span>` : "Dictate";
+  // The right-hand button lives in a fixed-width slot: ⚡ never moves.
+  const inner = rec ? popActions()
+    : busy ? (S.busySlot === "cancel"
+        ? `<div class="pbtn ghostbtn" data-act="cancel" title="Stop and throw away">${ic("close")}Cancel</div>`
+        : `<div class="pbtn off" title="Wait a moment">${ic("mic")}Start</div>`)
+    : P && P[3] ? `<div class="pbtn" data-act="retry">${ic("refresh")}Retry</div>`
+    : `<div class="pbtn${down ? " off" : ""}"${down ? "" : ` data-act="start"`}>${ic("mic")}Start</div>`;
+  const btn = `<div class="pslot">${inner}</div>`;
+  const strip = "";
+  const list = g ? recent.slice(0, 2).map((r, i) => i === 0 && g.fresh ? Object.assign({}, r, { when: "Just now", fresh: true }) : r) : (S.showAll ? recent : recent.slice(0, 5));
+  const rows = list.map((r, i) => {
+    const audio = r.stage === "audio", busyRow = !!r.busy;
+    const icon = busyRow ? `<div class="ring"></div>${ic(r.busy === "clean" ? "auto_awesome" : "graphic_eq")}` : ic(audio ? "graphic_eq" : r.stage === "clean" ? "auto_awesome" : "notes");
+    const label = audio ? `<b class="miss">Not transcribed</b>` : `<b>${r.text}</b>`;
+    const sub = `${r.when} · ${r.len}${busyRow ? (r.busy === "clean" ? " · cleaning up…" : " · transcribing…") : ""}`;
+    // Same buttons on every transcribed row; only the tooltip (and what ✨ does) changes.
+    //   ✨ = copy cleaned text if it exists, otherwise make it.  📋 = copy raw text.
+    // The row's own icon (notes vs ✨) is what tells you which kind it is.
+    const first = audio
+      ? `<div class="ib" data-act="transcribe" data-i="${i}" title="Transcribe">${ic("refresh")}</div>`
+      : r.stage === "clean" ? `<div class="ib" data-act="copyclean" data-i="${i}" title="Copy cleaned text">${ic("auto_awesome")}</div>`
+      : `<div class="ib" data-act="cleanrow" data-i="${i}" title="Clean up">${ic("auto_awesome")}</div>`;
+    const copy = audio ? "" : `<div class="ib" data-act="copyraw" data-i="${i}" title="Copy raw text">${ic("content_copy")}</div>`;
+    return `<div class="row${r.fresh ? " new" : ""}${audio ? " audio" : ""}"${audio || busyRow ? "" : ` data-act="copy"`} data-i="${i}">
+      <div class="ricon${audio ? " miss" : ""}${busyRow ? " busy" : ""}">${icon}</div>
+      <div class="rtext">${label}<small>${sub}</small></div>
+      ${busyRow ? "" : `<div class="acts${audio ? " always" : ""}">${first}${copy}<div class="ib" data-act="reveal" title="Show in folder">${ic("folder_open")}</div><div class="ib" data-act="del" data-i="${i}" title="Delete (to trash)">${ic("delete")}</div></div>`}
+    </div>`; }).join("");
+  const more = !g && recent.length > 5 ? `<button class="more" data-act="more">${S.showAll ? "Show less" : `Show ${recent.length - 5} more`}</button>` : "";
+  const toastText = g ? g.toast || "" : S.toast;
+  const head = !g && S.confirmClear
+    ? `<div class="rechead confirm"><span class="ms" style="color:var(--err)">delete_sweep</span>Delete all ${recent.length}?<span class="sp"></span><button class="mini" data-act="clearNo">Cancel</button><button class="mini danger" data-act="clearYes">Delete</button></div>`
+    : `<div class="rechead">Recent<span class="sp"></span><span class="toast" style="opacity:${toastText ? 1 : 0}">${ic("check_circle")}${toastText || "Copied"}</span>
+      <div class="ib" data-act="folder" title="Open folder" style="--b:32px">${ic("folder")}</div>${recent.length && !(g && g.empty) ? `<div class="ib" data-act="clear" title="Delete all (to trash)" style="--b:32px">${ic("delete_sweep")}</div>` : ""}</div>`;
+  return `<div class="popout${g ? " still" : ""}" data-pop>
+    <div class="phead"><div class="pico${rec ? " rec" : ""}${st === "quiet" ? " calm" : ""}${busy ? " busy" : ""}${P ? (P[4] ? " soft" : " bad") : ""}"${busy ? ` title="${st === "working" ? "Writing it out" : "Cleaning up"}"` : ""}>${busy ? `<div class="ring"></div>` : ""}${ic(P ? P[0] : st === "cleaning" ? "auto_awesome" : "mic")}</div><div class="ptitle">${title}</div>${live}${btn}</div>
+    ${strip}
+    <div class="divider"></div>
+    ${head}
+    ${recent.length && !(g && g.empty) ? `<div class="list">${rows}</div>${more}` : `<div class="pempty">Nothing yet</div>`}
+  </div>`;
+}
+function popout() { return S.popOpen ? popoutHTML(S.state === "long" ? "talking" : S.state) : ""; }
+
+// Slide/flip cards need fixed widths to animate: measure both faces so edges stay 6 px.
+function fitHoverCards() {
+  document.querySelectorAll(".hcard").forEach(c => {
+    const pad = (c.offsetHeight - c.querySelector(".badge").offsetHeight) / 2;
+    const w = f => { const k = [...f.children]; return k.reduce((a, e) => a + e.offsetWidth, 0) + 6 * (k.length - 1) + 2 * pad + 2; };
+    c.style.setProperty("--rw", w(c.querySelector(".face.rest")) + "px");
+    c.style.setProperty("--hw", w(c.querySelector(".face.acts")) + "px");
+  });
+}
+function render() {
+  document.querySelectorAll("[data-k]").forEach(g => g.querySelectorAll("button").forEach(b => b.classList.toggle("on", g.dataset.k === "state" && S.long && talkingish(S.state) ? b.dataset.v === "long" : S[g.dataset.k] === b.dataset.v)));
+  // Only animate in when something new appears, not on every redraw.
+  const put = (el, html) => { const was = el.innerHTML !== ""; el.innerHTML = html; if (was && el.firstElementChild) el.firstElementChild.style.animation = "none"; };
+  // The popout already shows the state (and Stop), so the card steps aside while it is open.
+  put($("#cardslot"), S.popOpen ? "" : card(S.state, S, clock(Date.now() - S.startedAt)));
+  put($("#popslot"), popout());
+  const bm = $("#barmic");
+  bm.className = "barbtn" + (talkingish(S.state) ? " rec" : S.state === "working" || S.state === "cleaning" ? " busy" : ["mic", "eleven", "nokey"].includes(S.state) ? " err" : S.state === "down" ? " down" : "") + (S.popOpen ? " open" : "");
+  bm.innerHTML = ic("mic", !talkingish(S.state) && !["working", "cleaning"].includes(S.state));
+  const gal = [["talking", "Talking"], ["quiet", "Talking, quiet"], ["talking", "Talking for 10 hours", { t: "10:03:12" }]];
+  if (S.layout === "flip") gal.push(["talking", "Right-clicked → clean up", { flip: "clean" }]);
+  if (/^h/.test(S.layout)) gal.splice(1, 0, ["talking", "Mouse on it", { forceHover: true }]);
+  $("#hhelp").textContent = { b1: "", h1: "At rest: mic + timer. Mouse on it: they slide up and away, ✕ ✨ ✓ slide in. Card gets a bit wider.", h2: "At rest: mic + timer. Mouse on it: the card flips over like a coin and the back has ✕ ✨ ✓.", h3: "Mouse on it: the mic turns into ✕, the timer melts into ✨ ✓. Each piece changes in place.", h4: "Same as morph, but calm: no spin, no pop. Things just fade and shift a little." }[S.layout] || "";
+  gal.push(["working", "Working"], ["cleaning", "Cleaning up"], ["idle", "Done or ✕ → gone"], ["cleanfail", "Clean-up failed (6 s)"], ["clipboard", "Couldn't paste (8 s)"],
+    ["nospeech", "No speech heard (3 s)"], ["mic", "Mic problem"], ["eleven", "ElevenLabs failed"], ["nokey", "No API key"]);
+  $("#gallery").innerHTML = gal.map(([st, label, extra]) =>
+    `<div class="gcell">${st === "idle" ? `<span class="gone">card fades away</span>` : card(st, Object.assign({}, S, extra || {}), (extra && extra.t) || "0:12")}<label>${label}</label></div>`).join("");
+  const PG = [["idle", "Resting"], ["talking", "Talking"], ["long", "Talking 10 h"], ["working", "Writing it out (after ✓)"], ["cleaning", "Cleaning up (after ✨)"],
+    ["idle", "Done: copied, new row on top", { toast: "Copied", fresh: true }], ["cleanfail", "Clean-up failed"], ["clipboard", "Couldn't paste (card flow)"],
+    ["nospeech", "No speech heard"], ["mic", "Mic problem"], ["eleven", "ElevenLabs failed"], ["nokey", "No API key"], ["down", "Service not running"], ["idle", "Nothing saved yet", { empty: true }]];
+  $("#popgal").innerHTML = PG.map(([st, label, g]) => `<div class="cell">${popoutHTML(st === "long" ? "talking" : st, Object.assign({ long: st === "long" }, g || {}))
+    .replace(">0:12<", st === "long" ? ">10:03:12<" : ">0:12<")}<label>${label}</label></div>`).join("");
+  fitHoverCards();
+  tooltips();
+}
+// DMS-style tooltip: one floating label in the stage, so the card's clipping can't cut it.
+function tooltips() {
+  document.querySelectorAll("#stage [title]").forEach(el => { el.dataset.tip = el.title; el.removeAttribute("title"); });
+}
+const tip = document.createElement("div"); tip.className = "tip"; document.getElementById("stage").appendChild(tip);
+let tipFor = null, tipTimer = 0;
+document.getElementById("stage").addEventListener("mouseover", e => {
+  const el = e.target.closest("[data-tip]");
+  if (el === tipFor) return;
+  tipFor = el; clearTimeout(tipTimer); tip.classList.remove("show");
+  if (!el) return;
+  tipTimer = setTimeout(() => {
+    if (!el.isConnected) return;
+    const st = document.getElementById("stage").getBoundingClientRect(), r = el.getBoundingClientRect();
+    tip.textContent = el.dataset.tip;
+    const w = tip.offsetWidth, h = tip.offsetHeight;
+    // Prefer below (the card and bar live at the top); keep inside the screen edges.
+    let top = r.bottom - st.top + 8;
+    if (top + h > st.height - 6) top = r.top - st.top - h - 8;
+    const left = Math.min(Math.max(6, r.left - st.left + r.width / 2 - w / 2), st.width - w - 6);
+    tip.style.top = top + "px"; tip.style.left = left + "px"; tip.classList.add("show");
+  }, 350);
+});
+document.getElementById("stage").addEventListener("mouseleave", () => { tipFor = null; clearTimeout(tipTimer); tip.classList.remove("show"); });
+
+let timers = [];
+const later = (ms, fn) => timers.push(setTimeout(fn, ms));
+const clearLater = () => { timers.forEach(clearTimeout); timers = []; };
+function setState(st) {
+  clearLater();
+  if (st === "long") { S.state = "talking"; S.long = true; voiceLoop(); render(); S.startedAt = Date.now() - (10 * 3600 + 3 * 60 + 12) * 1000; render(); return; }
+  S.long = false; S.state = st;
+  if (talkingish(st)) { S.startedAt = Date.now() - (st === "quiet" ? 15000 : 12000); if (st === "talking") voiceLoop(); }
+  const fade = { cleanfail: 6000, clipboard: 8000, nospeech: 3000 }[st];
+  if (fade) later(fade, () => setState("idle"));
+  render();
+}
+function voiceLoop() { // talking <-> quiet now and then, like real speech
+  later(3500 + Math.random() * 3000, () => { if (S.state !== "talking") return; S.state = "quiet"; render(); later(1200, () => { if (S.state === "quiet") { S.state = "talking"; render(); voiceLoop(); } }); });
+}
+function start(keepPop) { if (!keepPop) S.popOpen = false; S.flip = "done"; setState("talking"); S.startedAt = Date.now(); render(); }
+// copyOnly: finished from the popout. You're in the popout, so pasting makes no sense: it goes to the clipboard.
+function finish(clean, copyOnly) {
+  if (!talkingish(S.state)) return;
+  const len = clock(Date.now() - S.startedAt);
+  setState("working");
+  later(900, () => {
+    if (clean) { S.state = "cleaning"; render(); }
+    later(clean ? 1600 : 0, () => {
+      const text = words[Math.floor(Math.random() * words.length)];
+      recent.forEach(r => r.fresh = false);
+      recent.unshift({ text, when: "Just now", len, stage: clean ? "clean" : "raw", fresh: true }); recent = recent.slice(0, 20);
+      if (copyOnly) { setState("idle"); toast("Copied"); }
+      else { $("#typed").textContent += text + " "; setState("idle"); }
+    });
+  });
+}
+function toast(t) { S.toast = t; render(); clearTimeout(toast.t); toast.t = setTimeout(() => { S.toast = ""; render(); }, 1600); }
+
+document.addEventListener("click", e => {
+  const seg = e.target.closest("[data-k] button");
+  if (seg) { const k = seg.parentElement.dataset.k; if (k === "state") setState(seg.dataset.v); else { S[k] = seg.dataset.v; render(); } return; }
+  if (e.target.closest("#barmic")) { S.popOpen = !S.popOpen; render(); return; }
+  if (e.target.closest("#openPop")) { S.popOpen = true; render(); return; }
+  if (e.target.closest("#modb")) { talkingish(S.state) ? finish(false) : start(); return; }
+  const a = e.target.closest("[data-act]");
+  if (!a) { if (S.popOpen && !e.target.closest("[data-pop]") && e.target.closest("#stage")) { S.popOpen = false; render(); } return; }
+  const i = Number(a.dataset.i);
+  switch (a.dataset.act) {
+    case "cancel": setState("idle"); break;
+    // Finishing from the popout closes it first, so the keyboard is back in your app before the paste.
+    // From the popout: stays open, result is copied (not pasted) and shows up at the top of Recent.
+    case "done": finish(false, !!a.closest("[data-pop]")); break;
+    case "clean": finish(true, !!a.closest("[data-pop]")); break;
+    case "confirm": finish(S.flip === "clean"); break;
+    case "retry": setState("working"); later(900, () => setState("idle")); break;
+    case "start": start(true); break; // popout stays open
+    case "live": S.live = !S.live; render(); break;
+    case "more": S.showAll = !S.showAll; render(); break;
+    case "copy": e.stopPropagation(); toast("Copied"); break;
+    case "copyraw": e.stopPropagation(); toast("Raw text copied"); break;
+    case "copyclean": e.stopPropagation(); toast("Cleaned text copied"); break;
+    // Re-run a step on an old take: writes the missing file next to the audio.
+    case "transcribe": { e.stopPropagation(); const r = (S.showAll ? recent : recent.slice(0, 5))[i]; r.busy = "transcribe"; render();
+      setTimeout(() => { r.busy = ""; r.stage = "raw"; r.text = "okay so the plan is we first fix the socket thing"; render(); toast("Transcribed"); }, 1400); break; }
+    case "cleanrow": { e.stopPropagation(); const r = (S.showAll ? recent : recent.slice(0, 5))[i]; r.busy = "clean"; render();
+      setTimeout(() => { r.busy = ""; r.stage = "clean"; render(); toast("Cleaned up"); }, 1800); break; }
+    case "reveal": toast("Opened folder"); break;
+    case "folder": toast("Opened folder"); break;
+    case "del": e.stopPropagation(); recent.splice(i, 1); toast("Moved to trash"); break;
+    case "clear": S.confirmClear = true; render(); clearTimeout(S.cct); S.cct = setTimeout(() => { S.confirmClear = false; render(); }, 5000); break;
+    case "clearNo": S.confirmClear = false; render(); break;
+    case "clearYes": S.confirmClear = false; recent = []; S.showAll = false; toast("All moved to trash"); break;
+  }
+});
+document.addEventListener("contextmenu", e => {
+  if (e.target.closest("#barmic")) { e.preventDefault(); talkingish(S.state) ? finish(false) : start(); return; }
+  if (e.target.closest("[data-act=confirm]")) { e.preventDefault(); S.flip = S.flip === "clean" ? "done" : "clean"; render(); }
+});
+document.addEventListener("keydown", e => { if (e.key === "b" && !e.ctrlKey && !e.metaKey) talkingish(S.state) ? finish(false) : start(); });
+setInterval(() => { if (!talkingish(S.state)) return; document.querySelectorAll("#cardslot .t, [data-clock]").forEach(el => el.textContent = clock(Date.now() - S.startedAt)); }, 1000);
+render();
+</script>
+</body>
+</html>

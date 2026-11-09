@@ -12,13 +12,14 @@ use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::H
 const API: &str = "https://api.elevenlabs.io";
 const WS: &str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 
-pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, wav: Vec<u8>) -> Result<String> {
+/// Uploads a whole recording (here: the take's Ogg Opus file).
+pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, audio: Vec<u8>) -> Result<String> {
     #[derive(Deserialize)]
     struct Reply {
         text: String,
     }
 
-    let part = reqwest::multipart::Part::bytes(wav).file_name("audio.wav").mime_str("audio/wav")?;
+    let part = reqwest::multipart::Part::bytes(audio).file_name("audio.ogg").mime_str("audio/ogg")?;
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
         .text("model_id", "scribe_v2")
@@ -33,7 +34,7 @@ pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, wav
         .post(format!("{API}/v1/speech-to-text"))
         .header("xi-api-key", key)
         .multipart(form)
-        .timeout(Duration::from_secs(120))
+        .timeout(Duration::from_secs(600))
         .send()
         .await
         .context("could not reach ElevenLabs")?;

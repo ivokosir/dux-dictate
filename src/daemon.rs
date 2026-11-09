@@ -1,7 +1,10 @@
 //! The background service: one recording at a time, state broadcast to the UI.
+//!
+//! Takes live in ~/Music/Dictations as plain files (see files.rs). The daemon
+//! only keeps what is happening right now.
 
 use std::{
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::PathBuf,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -19,17 +22,19 @@ use tokio::{
 
 use crate::{
     Config,
-    audio::{self, BYTES_PER_SEC, Recorder},
-    eleven, output,
+    audio::{self, BYTES_PER_SEC, Encoder, Recorder},
+    eleven, files, output,
 };
-
-const HISTORY: usize = 15;
 
 #[derive(Serialize, Clone, Default)]
 pub struct Snapshot {
     daemon: bool,
-    /// idle | recording | transcribing | cleaning | done | error
+    /// idle | recording | transcribing | cleaning | problem
     state: String,
+    /// When state is "problem": cleanfail | paste | nospeech | mic | eleven | nokey | other
+    problem: String,
+    /// Details for a problem (shown as a tooltip).
+    message: String,
     /// direct | luna
     mode: String,
     /// Setting: the next recording streams live.
@@ -37,18 +42,14 @@ pub struct Snapshot {
     /// The current recording streams live.
     live: bool,
     started_ms: u64,
-    text: String,
-    error: String,
     can_retry: bool,
     configured: bool,
-    history: Vec<Entry>,
-}
-
-#[derive(Serialize, Clone)]
-struct Entry {
-    text: String,
-    at_ms: u64,
-    mode: String,
+    /// The bar popout is open: the card steps aside, and finishing copies instead of pasting.
+    popout: bool,
+    /// The take being recorded or worked on (the Recent list hides it until it is done).
+    current: String,
+    /// Bumped whenever takes on disk change, so the popout knows to re-read the folder.
+    files: u64,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -73,16 +74,31 @@ impl Mode {
     }
 }
 
+/// How a finished take reaches you.
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum Out {
+    /// Ctrl+V into the app you were in.
+    Paste,
+    /// Clipboard only (finished from the popout: you are not in your app).
+    Copy,
+}
+
 enum Stop {
-    Finish(Option<Mode>),
+    Finish(Option<Mode>, Out),
     Cancel,
+}
+
+struct Failed {
+    stamp: String,
+    mode: Mode,
+    out: Out,
 }
 
 #[derive(Default)]
 struct Ctl {
     session: u64,
     stop: Option<oneshot::Sender<Stop>>,
-    failed: Option<(PathBuf, Mode)>,
+    failed: Option<Failed>,
 }
 
 struct Daemon {
@@ -92,6 +108,7 @@ struct Daemon {
     ctl: Mutex<Ctl>,
     config: Mutex<Config>,
     http: reqwest::Client,
+    dir: PathBuf,
 }
 
 fn now_ms() -> u64 {
@@ -118,60 +135,72 @@ impl Daemon {
         ctl.session
     }
 
-    /// Hide the card after a moment, unless something new happened.
-    fn settle_later(self: &Arc<Self>, id: u64, after: Duration) {
-        let d = self.clone();
-        tokio::spawn(async move {
-            tokio::time::sleep(after).await;
-            if d.is_current(id) && matches!(d.state().as_str(), "done" | "error") {
-                d.update(|s| {
-                    s.state = "idle".into();
-                    s.text.clear();
-                    s.error.clear();
-                });
-            }
-        });
+    fn files_changed(&self) {
+        self.update(|s| s.files += 1);
     }
 
     fn idle(&self, id: u64) {
         if self.is_current(id) {
             self.update(|s| {
                 s.state = "idle".into();
-                s.text.clear();
-                s.error.clear();
+                s.problem.clear();
+                s.message.clear();
+                s.current.clear();
+                s.can_retry = false;
             });
         }
     }
 
-    fn fail(self: &Arc<Self>, id: u64, message: String, saved: Option<(PathBuf, Mode)>) {
-        eprintln!("dictate: {message}");
+    /// Shows a problem. Small ones fade by themselves; real failures stay until dismissed.
+    fn problem(self: &Arc<Self>, id: u64, code: &str, message: String, failed: Option<Failed>) {
+        eprintln!("dictate: {code}: {message}");
         if !self.is_current(id) {
             return;
         }
-        let can_retry = saved.is_some();
-        self.ctl.lock().unwrap().failed = saved;
+        let can_retry = failed.is_some();
+        self.ctl.lock().unwrap().failed = failed;
+        let code = code.to_owned();
+        let fade = match code.as_str() {
+            "nospeech" => Some(3),
+            "cleanfail" => Some(6),
+            "paste" => Some(8),
+            _ => None,
+        };
         self.update(|s| {
-            s.state = "error".into();
-            s.error = message;
+            s.state = "problem".into();
+            s.problem = code;
+            s.message = message;
             s.can_retry = can_retry;
+            s.current.clear();
         });
-        self.settle_later(id, Duration::from_secs(10));
+        if let Some(secs) = fade {
+            let d = self.clone();
+            tokio::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(secs)).await;
+                if d.state() == "problem" {
+                    d.idle(id);
+                }
+            });
+        }
     }
 
     fn command(self: &Arc<Self>, line: &str) -> String {
         let mut words = line.split_whitespace();
         let cmd = words.next().unwrap_or("");
-        let arg = words.next();
+        let args: Vec<&str> = words.collect();
+        let mode = args.iter().find_map(|a| Mode::parse(Some(a)));
         let state = self.state();
         let busy = matches!(state.as_str(), "transcribing" | "cleaning");
+        // Finishing while the popout is open (or asked for) only copies.
+        let out = if args.contains(&"copy") || self.snap.borrow().popout { Out::Copy } else { Out::Paste };
         match cmd {
             "toggle" => match state.as_str() {
-                "recording" => self.stop(Stop::Finish(Mode::parse(arg))),
+                "recording" => self.stop(Stop::Finish(mode, out)),
                 _ if busy => {}
-                _ => self.start(Mode::parse(arg).unwrap_or(Mode::Direct)),
+                _ => self.start(mode.unwrap_or(Mode::Direct)),
             },
-            "start" if state != "recording" && !busy => self.start(Mode::parse(arg).unwrap_or(Mode::Direct)),
-            "stop" if state == "recording" => self.stop(Stop::Finish(Mode::parse(arg))),
+            "start" if state != "recording" && !busy => self.start(mode.unwrap_or(Mode::Direct)),
+            "stop" if state == "recording" => self.stop(Stop::Finish(mode, out)),
             "cancel" => {
                 if state == "recording" {
                     self.stop(Stop::Cancel);
@@ -180,10 +209,10 @@ impl Daemon {
                     self.idle(id);
                 }
             }
-            "retry" if state != "recording" && !busy => self.retry(),
-            "streaming" => {
+            "retry" if !busy && state != "recording" => self.retry(),
+            "streaming" if state != "recording" && !busy => {
                 let mut config = self.config.lock().unwrap();
-                config.streaming = match arg {
+                config.streaming = match args.first().copied() {
                     Some("on") => true,
                     Some("off") => false,
                     _ => !config.streaming,
@@ -194,7 +223,12 @@ impl Daemon {
                 let on = config.streaming;
                 self.update(|s| s.streaming = on);
             }
-            "start" | "stop" | "retry" => {}
+            "popout" => {
+                let open = args.first().copied() == Some("on");
+                self.update(|s| s.popout = open);
+            }
+            "refresh" => self.files_changed(),
+            "start" | "stop" | "retry" | "streaming" => {}
             other => return format!("unknown command: {other}"),
         }
         "ok".into()
@@ -212,70 +246,77 @@ impl Daemon {
             let mut ctl = self.ctl.lock().unwrap();
             ctl.session += 1;
             ctl.stop = Some(tx);
+            ctl.failed = None;
             ctl.session
         };
         let config = self.config.lock().unwrap().clone();
         let live = config.streaming;
+        let stamp = files::new_stamp(&self.dir);
         self.update(|s| {
             s.state = "recording".into();
+            s.problem.clear();
+            s.message.clear();
             s.mode = mode.name().into();
             s.live = live;
             s.started_ms = now_ms();
-            s.text.clear();
-            s.error.clear();
             s.can_retry = false;
             s.configured = crate::api_key().is_ok();
+            s.current = stamp.clone();
         });
-        tokio::spawn(self.clone().run(id, mode, live, config, rx));
+        tokio::spawn(self.clone().run(id, stamp, mode, live, config, rx));
     }
 
-    async fn run(self: Arc<Self>, id: u64, mode: Mode, live: bool, config: Config, mut stop_rx: oneshot::Receiver<Stop>) {
+    async fn run(
+        self: Arc<Self>,
+        id: u64,
+        stamp: String,
+        mode: Mode,
+        live: bool,
+        config: Config,
+        mut stop_rx: oneshot::Receiver<Stop>,
+    ) {
         let key = match crate::api_key() {
             Ok(key) => key,
-            Err(error) => return self.fail(id, error.to_string(), None),
+            Err(error) => return self.problem(id, "nokey", error.to_string(), None),
         };
         let mut recorder = match Recorder::start() {
             Ok(r) => r,
-            Err(error) => return self.fail(id, error.to_string(), None),
+            Err(error) => return self.problem(id, "mic", error.to_string(), None),
+        };
+        let ogg = files::audio(&self.dir, &stamp);
+        let encoder = match Encoder::start(&ogg) {
+            Ok(e) => e,
+            Err(error) => return self.problem(id, "other", format!("{error:#}"), None),
         };
 
-        // Live mode: audio goes to the WebSocket while we record.
+        // Live mode: audio also goes to the WebSocket while we record.
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let mut audio_tx = live.then_some(audio_tx);
         let mut stream_task = if live {
-            let d = self.clone();
             let key = key.clone();
             let language = config.language.clone();
-            Some(tokio::spawn(async move {
-                eleven::stream(&key, &language, audio_rx, move |text| {
-                    if d.is_current(id) {
-                        d.update(|s| s.text = text);
-                    }
-                })
-                .await
-            }))
+            Some(tokio::spawn(async move { eleven::stream(&key, &language, audio_rx, |_| {}).await }))
         } else {
             drop(audio_rx);
             None
         };
 
-        let mut pcm: Vec<u8> = Vec::with_capacity(BYTES_PER_SEC * 60);
+        let mut bytes = 0usize;
         let mut pending: Vec<u8> = Vec::new();
         let mut buf = vec![0u8; 4096];
         let mut window: Vec<u8> = Vec::new();
         let mut last_level = Instant::now();
-        let limit = tokio::time::sleep(Duration::from_secs(config.max_minutes.max(1) * 60));
-        tokio::pin!(limit);
         let mut mic_lost = false;
 
+        // No time limit: the audio goes straight to disk, so long takes are fine.
         let stop = loop {
             tokio::select! {
                 how = &mut stop_rx => break how.unwrap_or(Stop::Cancel),
-                _ = &mut limit => break Stop::Finish(None),
                 n = recorder.read(&mut buf) => match n {
                     Ok(n) if n > 0 => {
                         let data = &buf[..n];
-                        pcm.extend_from_slice(data);
+                        bytes += n;
+                        encoder.write(data);
                         window.extend_from_slice(data);
                         if let Some(tx) = &audio_tx {
                             pending.extend_from_slice(data);
@@ -292,7 +333,7 @@ impl Daemon {
                     }
                     _ => {
                         mic_lost = true;
-                        break Stop::Finish(None);
+                        break Stop::Finish(None, Out::Paste);
                     }
                 }
             }
@@ -300,7 +341,8 @@ impl Daemon {
 
         let rest = recorder.finish().await;
         self.level.send_replace(0.0);
-        pcm.extend_from_slice(&rest);
+        bytes += rest.len();
+        encoder.write(&rest);
         if let Some(tx) = audio_tx.take() {
             pending.extend_from_slice(&rest);
             if !pending.is_empty() {
@@ -309,22 +351,29 @@ impl Daemon {
             // Dropping the sender tells the stream to commit and finish.
         }
 
-        let final_mode = match stop {
+        let remove_take = |d: &Daemon| {
+            let _ = std::fs::remove_file(files::audio(&d.dir, &stamp));
+        };
+        let (final_mode, out) = match stop {
             Stop::Cancel => {
                 if let Some(task) = stream_task.take() {
                     task.abort();
                 }
+                let _ = encoder.finish().await;
+                remove_take(&self);
                 return self.idle(id);
             }
-            Stop::Finish(m) => m.unwrap_or(mode),
+            Stop::Finish(m, out) => (m.unwrap_or(mode), out),
         };
 
-        if pcm.len() < BYTES_PER_SEC * 3 / 10 {
+        if bytes < BYTES_PER_SEC * 3 / 10 {
             if let Some(task) = stream_task.take() {
                 task.abort();
             }
+            let _ = encoder.finish().await;
+            remove_take(&self);
             if mic_lost {
-                return self.fail(id, "Could not record from the microphone".into(), None);
+                return self.problem(id, "mic", "Could not record from the microphone".into(), None);
             }
             return self.idle(id);
         }
@@ -334,9 +383,11 @@ impl Daemon {
             s.mode = final_mode.name().into();
         });
 
-        // Keep the audio on disk until it is transcribed, so nothing is lost.
-        let wav = audio::wav(&pcm);
-        let saved = save_recording(&wav).map_err(|e| eprintln!("dictate: could not back up audio: {e}")).ok();
+        let saved = encoder.finish().await;
+        if let Err(error) = &saved {
+            eprintln!("dictate: saving the audio failed: {error:#}");
+        }
+        self.files_changed();
 
         let mut text = String::new();
         if let Some(task) = stream_task.take() {
@@ -347,92 +398,91 @@ impl Daemon {
             }
         }
         if text.trim().is_empty() {
-            match eleven::transcribe(&self.http, &key, &config.language, wav).await {
+            let result = match std::fs::read(&ogg) {
+                Ok(data) => eleven::transcribe(&self.http, &key, &config.language, data).await,
+                Err(error) => Err(anyhow::anyhow!("the audio file is missing: {error}")),
+            };
+            match result {
                 Ok(t) => text = t,
                 Err(error) => {
-                    let message = format!("{error:#}");
-                    return self.fail(id, message, saved.map(|p| (p, final_mode)));
+                    let failed = saved.is_ok().then(|| Failed { stamp: stamp.clone(), mode: final_mode, out });
+                    return self.problem(id, "eleven", format!("{error:#}"), failed);
                 }
             }
         }
-        if let Some(path) = &saved {
-            let _ = std::fs::remove_file(path);
-        }
-        self.deliver(id, text, final_mode, &config).await;
+        self.deliver(id, stamp, text, final_mode, out, &config).await;
     }
 
-    async fn deliver(self: &Arc<Self>, id: u64, text: String, mode: Mode, config: &Config) {
+    async fn deliver(self: &Arc<Self>, id: u64, stamp: String, text: String, mode: Mode, out: Out, config: &Config) {
         if !self.is_current(id) {
             return;
         }
         let mut text = text.trim().to_owned();
         if text.is_empty() {
-            return self.fail(id, "No speech heard".into(), None);
+            // Nothing was said: the audio is just silence, so drop it for good.
+            let _ = std::fs::remove_file(files::audio(&self.dir, &stamp));
+            self.files_changed();
+            return self.problem(id, "nospeech", String::new(), None);
         }
+        if let Err(error) = files::write_text(&files::raw(&self.dir, &stamp), &text) {
+            eprintln!("dictate: could not save the transcript: {error:#}");
+        }
+        let mut clean_failed = None;
         if mode == Mode::Luna {
-            self.update(|s| {
-                s.state = "cleaning".into();
-                s.text = text.clone();
-            });
+            self.update(|s| s.state = "cleaning".into());
             match output::luna(&config.luna_command, &text, config.luna_timeout_secs).await {
-                Ok(cleaned) => text = cleaned,
-                Err(error) => eprintln!("dictate: cleanup failed, pasting the original: {error:#}"),
+                Ok(cleaned) => {
+                    let _ = files::write_text(&files::clean(&self.dir, &stamp), &cleaned);
+                    text = cleaned;
+                }
+                Err(error) => clean_failed = Some(format!("{error:#}")),
             }
             if !self.is_current(id) {
                 return;
             }
         }
-        let pasted = output::paste(&text).await;
-        let entry = Entry { text: text.clone(), at_ms: now_ms(), mode: mode.name().into() };
-        self.update(|s| {
-            s.state = "done".into();
-            s.text = text;
-            s.error = pasted.err().map(|e| e.to_string()).unwrap_or_default();
-            s.history.insert(0, entry);
-            s.history.truncate(HISTORY);
-        });
-        self.settle_later(id, Duration::from_millis(2600));
+        let delivered = match out {
+            Out::Paste => output::paste(&text).await,
+            Out::Copy => output::copy(&text).await,
+        };
+        files::prune(&self.dir, config.keep, &stamp);
+        self.files_changed();
+        if let Err(error) = delivered {
+            return self.problem(id, "paste", error.to_string(), None);
+        }
+        if let Some(message) = clean_failed {
+            return self.problem(id, "cleanfail", message, None);
+        }
+        self.idle(id);
     }
 
     fn retry(self: &Arc<Self>) {
-        let Some((path, mode)) = self.ctl.lock().unwrap().failed.take() else { return };
+        let Some(Failed { stamp, mode, out }) = self.ctl.lock().unwrap().failed.take() else { return };
         let id = self.new_session();
         let config = self.config.lock().unwrap().clone();
         self.update(|s| {
             s.state = "transcribing".into();
+            s.problem.clear();
+            s.message.clear();
             s.mode = mode.name().into();
             s.live = false;
-            s.text.clear();
-            s.error.clear();
             s.can_retry = false;
+            s.current = stamp.clone();
         });
         let d = self.clone();
         tokio::spawn(async move {
             let result = async {
                 let key = crate::api_key()?;
-                let wav = std::fs::read(&path).context("the saved recording is gone")?;
-                eleven::transcribe(&d.http, &key, &config.language, wav).await
+                let data = std::fs::read(files::audio(&d.dir, &stamp)).context("the saved recording is gone")?;
+                eleven::transcribe(&d.http, &key, &config.language, data).await
             }
             .await;
             match result {
-                Ok(text) => {
-                    let _ = std::fs::remove_file(&path);
-                    d.deliver(id, text, mode, &config).await;
-                }
-                Err(error) => d.fail(id, format!("{error:#}"), Some((path, mode))),
+                Ok(text) => d.deliver(id, stamp, text, mode, out, &config).await,
+                Err(error) => d.problem(id, "eleven", format!("{error:#}"), Some(Failed { stamp, mode, out })),
             }
         });
     }
-}
-
-fn save_recording(wav: &[u8]) -> Result<PathBuf> {
-    use std::io::Write;
-    let dir = crate::state_dir().join("recordings");
-    std::fs::DirBuilder::new().recursive(true).mode(0o700).create(&dir)?;
-    let path = dir.join(format!("{}.wav", now_ms()));
-    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
-    file.write_all(wav)?;
-    Ok(path)
 }
 
 async fn handle(d: Arc<Daemon>, stream: UnixStream) -> Result<()> {
@@ -494,12 +544,15 @@ pub async fn serve() -> Result<()> {
         configured: crate::api_key().is_ok(),
         ..Default::default()
     };
+    let dir = files::dir();
+    eprintln!("dictate: takes go to {}", dir.display());
     let d = Arc::new(Daemon {
         snap: watch::channel(snapshot).0,
         level: watch::channel(0.0).0,
         ctl: Mutex::new(Ctl::default()),
         config: Mutex::new(config),
         http: reqwest::Client::builder().user_agent(concat!("dictate/", env!("CARGO_PKG_VERSION"))).build()?,
+        dir,
     });
 
     eprintln!("dictate: listening on {}", path.display());

@@ -1,6 +1,7 @@
 mod audio;
 mod daemon;
 mod eleven;
+mod files;
 mod output;
 
 use std::{
@@ -24,13 +25,23 @@ USAGE:
   dictate serve                 run the daemon (systemd does this)
   dictate toggle [direct|luna]  start, or stop and paste
   dictate start [direct|luna]   start recording
-  dictate stop [direct|luna]    stop and paste (mode picks the cleanup)
-  dictate cancel                throw the recording away
-  dictate retry                 transcribe the last failed recording again
+  dictate stop [direct|luna] [copy]
+                                stop and paste (luna = clean up first, copy = clipboard only)
+  dictate cancel                throw the recording away / dismiss a problem
+  dictate retry                 transcribe the last failed take again
   dictate streaming on|off|toggle
   dictate status                print the state once (JSON)
   dictate watch                 print the state on every change (JSON lines)
   dictate set-key               save the ElevenLabs API key (read from stdin)
+
+TAKES (plain files in ~/Music/Dictations, no daemon needed):
+  dictate list [n]              newest takes as JSON
+  dictate transcribe <take>     (re)make <take>.txt from <take>.ogg
+  dictate clean <take>          make <take>.clean.txt with Luna
+  dictate copy <take> [raw|clean]
+  dictate reveal <take>         show it in the file manager
+  dictate trash <take>|all      move to the trash
+  dictate folder                open the folder
 ";
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -43,7 +54,8 @@ pub struct Config {
     /// Command that cleans the transcript in "luna" mode (stdin -> stdout).
     pub luna_command: String,
     pub luna_timeout_secs: u64,
-    pub max_minutes: u64,
+    /// How many takes to keep in the folder (older ones go to the trash).
+    pub keep: usize,
 }
 
 impl Default for Config {
@@ -53,7 +65,7 @@ impl Default for Config {
             language: "en".into(),
             luna_command: home().join(".local/bin/voxtype-luna-cleanup").display().to_string(),
             luna_timeout_secs: 95,
-            max_minutes: 10,
+            keep: 20,
         }
     }
 }
@@ -169,6 +181,70 @@ async fn client(line: String) -> Result<()> {
     Ok(())
 }
 
+/// Take commands work on the files directly, so they also work without the daemon.
+async fn takes(args: &[String]) -> Result<()> {
+    let dir = files::dir();
+    let take = || -> Result<&str> { files::check_stamp(args.get(1).map(String::as_str).unwrap_or("")) };
+    let changed = || async {
+        // Let the bar know (if the daemon runs); harmless otherwise.
+        if let Ok(mut s) = UnixStream::connect(socket_path()).await {
+            let _ = s.write_all(b"refresh\n").await;
+        }
+    };
+    match args[0].as_str() {
+        "list" => {
+            let n = args.get(1).and_then(|n| n.parse().ok()).unwrap_or(0);
+            println!("{}", serde_json::to_string(&files::list(&dir, n))?);
+        }
+        "transcribe" => {
+            let stamp = take()?;
+            let config = Config::load();
+            let data = std::fs::read(files::audio(&dir, stamp)).context("no audio for that take")?;
+            let http = reqwest::Client::builder().user_agent(concat!("dictate/", env!("CARGO_PKG_VERSION"))).build()?;
+            let text = eleven::transcribe(&http, &api_key()?, &config.language, data).await?;
+            if text.trim().is_empty() {
+                bail!("No speech heard");
+            }
+            files::write_text(&files::raw(&dir, stamp), &text)?;
+            changed().await;
+        }
+        "clean" => {
+            let stamp = take()?;
+            let config = Config::load();
+            let text = files::read_text(&files::raw(&dir, stamp)).context("not transcribed yet")?;
+            let cleaned = output::luna(&config.luna_command, &text, config.luna_timeout_secs).await?;
+            files::write_text(&files::clean(&dir, stamp), &cleaned)?;
+            changed().await;
+        }
+        "copy" => {
+            let stamp = take()?;
+            let path = match args.get(2).map(String::as_str) {
+                Some("clean") => files::clean(&dir, stamp),
+                _ => files::raw(&dir, stamp),
+            };
+            let text = files::read_text(&path).context("that text does not exist")?;
+            output::copy(&text).await?;
+        }
+        "reveal" => files::reveal(&files::audio(&dir, take()?)),
+        "trash" => {
+            if args.get(1).map(String::as_str) == Some("all") {
+                for stamp in files::stamps(&dir) {
+                    files::trash(&dir, &stamp)?;
+                }
+            } else {
+                files::trash(&dir, take()?)?;
+            }
+            changed().await;
+        }
+        "folder" => {
+            std::fs::create_dir_all(&dir)?;
+            files::open(&dir);
+        }
+        _ => unreachable!(),
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<String> = env::args().skip(1).collect();
     let cmd = args.first().map(String::as_str).unwrap_or("help");
@@ -189,12 +265,11 @@ fn main() -> Result<()> {
         tokio::runtime::Builder::new_current_thread().enable_all().build()?
     };
 
+    let _ = rustls::crypto::ring::default_provider().install_default();
     match cmd {
-        "serve" => {
-            let _ = rustls::crypto::ring::default_provider().install_default();
-            runtime.block_on(daemon::serve())
-        }
-        "toggle" | "start" | "stop" | "cancel" | "retry" | "streaming" | "status" | "watch" => {
+        "serve" => runtime.block_on(daemon::serve()),
+        "list" | "transcribe" | "clean" | "copy" | "reveal" | "trash" | "folder" => runtime.block_on(takes(&args)),
+        "toggle" | "start" | "stop" | "cancel" | "retry" | "streaming" | "popout" | "refresh" | "status" | "watch" => {
             runtime.block_on(client(args.join(" ")))
         }
         other => {

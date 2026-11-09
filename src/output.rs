@@ -26,9 +26,8 @@ async fn pipe(cmd: &str, args: &[&str], input: &str, timeout: Duration) -> Resul
     Ok(String::from_utf8_lossy(&out.stdout).into_owned())
 }
 
-/// Copies the text and presses Ctrl+V, like Voxtype's paste mode.
-/// Newlines stay text instead of acting as Enter presses.
-pub async fn paste(text: &str) -> Result<()> {
+/// Puts the text on the clipboard.
+pub async fn copy(text: &str) -> Result<()> {
     if std::env::var_os("DICTATE_NO_PASTE").is_some() {
         return Ok(());
     }
@@ -43,7 +42,16 @@ pub async fn paste(text: &str) -> Result<()> {
     stdin.write_all(text.as_bytes()).await?;
     drop(stdin);
     let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
+    Ok(())
+}
 
+/// Copies the text and presses Ctrl+V, like Voxtype's paste mode.
+/// Newlines stay text instead of acting as Enter presses.
+pub async fn paste(text: &str) -> Result<()> {
+    if std::env::var_os("DICTATE_NO_PASTE").is_some() {
+        return Ok(());
+    }
+    copy(text).await?;
     tokio::time::sleep(Duration::from_millis(150)).await;
     let status = Command::new("wtype")
         .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
