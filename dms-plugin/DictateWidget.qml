@@ -549,10 +549,11 @@ PluginComponent {
                         onClicked: if (!head.locked) root.run(["streaming", root.st.streaming ? "off" : "on"])
                     }
 
-                    // Fixed-width slot on the right: Start / ✨ ✓ / Cancel / Retry.
+                    // Fixed-width slot on the right: Start / ✕ ✨ ✓ / Cancel / Retry.
+                    // Same width in every state (3 × 36 + 2 × 6), so ⚡ never moves.
                     Item {
                         id: slot
-                        width: 92
+                        width: 120
                         height: 36
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
@@ -586,6 +587,16 @@ PluginComponent {
                             spacing: 6
                             visible: root.recording
 
+                            DActionButton {
+                                buttonSize: 36
+                                radius: 18
+                                iconSize: 18
+                                iconName: "close"
+                                iconColor: Theme.surfaceVariantText
+                                tooltipText: "Cancel"
+                                tooltipSide: "bottom"
+                                onClicked: root.run(["cancel"])
+                            }
                             DActionButton {
                                 buttonSize: 36
                                 radius: 18
