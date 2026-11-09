@@ -151,7 +151,8 @@ impl Daemon {
         }
     }
 
-    /// Shows a problem. Small ones fade by themselves; real failures stay until dismissed.
+    /// Shows a problem. Everything fades by itself; a failed take stays in Recent
+    /// (with ⟳ Transcribe), so nothing needs the card to stick around.
     fn problem(self: &Arc<Self>, id: u64, code: &str, message: String, failed: Option<Failed>) {
         eprintln!("dictate: {code}: {message}");
         if !self.is_current(id) {
@@ -164,7 +165,7 @@ impl Daemon {
             "nospeech" => Some(3),
             "cleanfail" => Some(6),
             "paste" => Some(8),
-            _ => None,
+            _ => Some(10),
         };
         self.update(|s| {
             s.state = "problem".into();
