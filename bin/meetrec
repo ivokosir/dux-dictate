@@ -11,6 +11,7 @@
 #   meetrec reveal <file>  show it selected in the file manager
 #   meetrec rename <file> <name>  rename (keeps the date; works while recording)
 #   meetrec delete <file>  move it (and its transcript) to the trash
+#   meetrec delete all     the same for every recording (not the one being recorded)
 #   meetrec transcribe <file>  ElevenLabs transcript with speakers, saved next to it as .txt
 #   meetrec copy-text <file>   copy the transcript text
 #   meetrec folder         open the recordings folder
@@ -351,6 +352,16 @@ cmd_delete() {
   if [ -n "$job" ]; then rm -f "$job"; fi
 }
 
+# Every recording except the one being recorded right now.
+cmd_delete_all() {
+  local current="" f
+  if is_recording && [ -s "$STATE" ]; then current="$(sed -n 1p "$STATE")"; fi
+  shopt -s nullglob nocaseglob
+  for f in "$OUT_DIR"/*.ogg "$OUT_DIR"/*.opus "$OUT_DIR"/*.mp3 "$OUT_DIR"/*.wav "$OUT_DIR"/*.m4a; do
+    if [ -f "$f" ] && [ "$f" != "$current" ]; then cmd_delete "$f"; fi
+  done
+}
+
 cmd_reveal() {
   need_file "${1:-}"
   local uri; uri="$(file_uri "$(readlink -f "$1")")"
@@ -369,10 +380,10 @@ case "${1:-}" in
   open) need_file "${2:-}"; setsid -f xdg-open "$2" >/dev/null 2>&1 ;;
   reveal) cmd_reveal "${2:-}" ;;
   rename) cmd_rename "${2:-}" "${3:-}" ;;
-  delete) cmd_delete "${2:-}" ;;
+  delete) if [ "${2:-}" = all ]; then cmd_delete_all; else cmd_delete "${2:-}"; fi ;;
   transcribe) cmd_transcribe "${2:-}" ;;
   _tx) cmd__tx "$2" ;;
   copy-text) need_file "${2:-}"; t="${2%.*}.txt"; need_file "$t"; wl-copy --type text/plain < "$t" ;;
   folder) mkdir -p "$OUT_DIR"; setsid -f xdg-open "$OUT_DIR" >/dev/null 2>&1 ;;
-  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+  *) sed -n '2,17p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

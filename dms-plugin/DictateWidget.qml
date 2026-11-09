@@ -33,7 +33,7 @@ PluginComponent {
             return;
         root.mode = m;
         meet.editingPath = "";
-        dict.confirmClear = false;
+        root.confirmClear = false;
         if (root.pluginService && root.pluginId)
             root.pluginService.savePluginState(root.pluginId, "mode", m);
     }
@@ -70,13 +70,14 @@ PluginComponent {
     onDictOpenChanged: {
         dict.run(["popout", dictOpen ? "on" : "off"]);
         if (dictOpen) {
-            dict.confirmClear = false;
+            root.confirmClear = false;
             dict.refreshList();
         }
     }
 
     onMeetOpenChanged: {
         if (meetOpen) {
+            root.confirmClear = false;
             meet.refreshStatus();
             meet.refreshList();
             meet.refreshSize();
@@ -137,6 +138,8 @@ PluginComponent {
 
     property real nowMs: Date.now()
     property string toast: ""
+    // "Delete all?" is being asked in the list header.
+    property bool confirmClear: false
     property string lastToast: ""
     readonly property color recColor: "#d32f2f"
 
@@ -221,7 +224,6 @@ PluginComponent {
 
         property var takes: []
         property bool showAll: false
-        property bool confirmClear: false
         // stamp -> "transcribe" | "clean" while a row is working
         property var rowBusy: ({})
         // ✨/✓ pressed in the popout: say "Copied" when it is done.
@@ -329,6 +331,7 @@ PluginComponent {
         property bool busy: false
         // Path of the recording whose name is being edited ("" = none).
         property string editingPath: ""
+        property bool showAll: false
         // Scroll position of the list, kept when the list reloads.
         property real listY: 0
         property real keepY: 0
@@ -662,6 +665,147 @@ PluginComponent {
         }
     }
 
+    // The row above a list, the same in both modes: title, Open folder, Delete all.
+    // "Delete all?" asks first, in the same row.
+    component ListHead: Item {
+        id: lh
+        property string title
+        property int count: 0
+        signal openFolder
+        signal clearAll
+
+        x: Theme.spacingS
+        width: parent ? parent.width - Theme.spacingS * 2 : 0
+        height: 32
+
+        StyledText {
+            visible: !root.confirmClear
+            text: lh.title
+            font.pixelSize: Theme.fontSizeMedium
+            font.weight: Font.Medium
+            color: Theme.surfaceVariantText
+            anchors.verticalCenter: parent.verticalCenter
+        }
+
+        ToastChip {
+            visible: !root.confirmClear && opacity > 0
+        }
+
+        Row {
+            visible: !root.confirmClear
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+
+            IconBtn {
+                iconName: "folder"
+                tip: "Open folder"
+                onClicked: lh.openFolder()
+            }
+            IconBtn {
+                visible: lh.count > 0
+                iconName: "delete_sweep"
+                tip: "Delete all (to trash)"
+                onClicked: {
+                    root.confirmClear = true;
+                    confirmTimer.restart();
+                }
+            }
+        }
+
+        Timer {
+            id: confirmTimer
+            interval: 5000
+            onTriggered: root.confirmClear = false
+        }
+
+        Item {
+            visible: root.confirmClear
+            anchors.fill: parent
+
+            Row {
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 8
+                DIcon {
+                    name: "delete_sweep"
+                    size: 18
+                    color: Theme.error
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                StyledText {
+                    text: "Delete all " + lh.count + "?"
+                    font.pixelSize: Theme.fontSizeMedium
+                    font.weight: Font.Medium
+                    color: Theme.surfaceText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            Row {
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                PillBtn {
+                    width: 80
+                    height: 28
+                    ghost: true
+                    label: "Cancel"
+                    onClicked: root.confirmClear = false
+                }
+                Rectangle {
+                    width: 76
+                    height: 28
+                    radius: 14
+                    color: delArea.containsMouse ? Theme.withAlpha(Theme.error, 0.26) : Theme.withAlpha(Theme.error, 0.16)
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: "Delete"
+                        font.pixelSize: Theme.fontSizeMedium
+                        font.weight: Font.Medium
+                        color: Theme.error
+                    }
+                    MouseArea {
+                        id: delArea
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        cursorShape: Qt.PointingHandCursor
+                        onClicked: {
+                            root.confirmClear = false;
+                            lh.clearAll();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Under a list with more than 5 rows: "Show 13 more" / "Show less".
+    component MoreBtn: Rectangle {
+        id: mb
+        property int count: 0
+        property bool open: false
+        signal toggled
+
+        visible: count > 5
+        x: Theme.spacingS
+        width: parent ? parent.width - Theme.spacingS * 2 : 0
+        height: 34
+        radius: Theme.cornerRadius
+        color: moreArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.08) : "transparent"
+        StyledText {
+            anchors.centerIn: parent
+            text: mb.open ? "Show less" : "Show " + (mb.count - 5) + " more"
+            font.pixelSize: Theme.fontSizeMedium
+            font.weight: Font.Medium
+            color: Theme.primary
+        }
+        MouseArea {
+            id: moreArea
+            anchors.fill: parent
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: mb.toggled()
+        }
+    }
+
     // One dictation take.
     component TakeRow: Item {
         id: tr
@@ -899,7 +1043,7 @@ PluginComponent {
             StyledText {
                 visible: !rr.editing
                 width: parent.width
-                text: meet.labelOf(rr.item) + " · " + meet.whenOf(rr.item)
+                text: meet.labelOf(rr.item)
                 textFormat: Text.PlainText
                 font.pixelSize: Theme.fontSizeMedium
                 color: Theme.surfaceText
@@ -914,7 +1058,7 @@ PluginComponent {
 
                 StyledText {
                     id: rowInfo
-                    text: root.clock(Number(rr.item.duration) * 1000) + " · " + root.fmtSize(rr.item.size) + (txState.text !== "" ? " · " : "")
+                    text: meet.whenOf(rr.item) + " · " + root.clock(Number(rr.item.duration) * 1000) + " · " + root.fmtSize(rr.item.size) + (txState.text !== "" ? " · " : "")
                     font.pixelSize: Theme.fontSizeSmall
                     font.features: { "tnum": 1 }
                     color: Theme.surfaceVariantText
@@ -1372,117 +1516,18 @@ PluginComponent {
                 Column {
                     spacing: Theme.spacingS
 
-                    // Recent header (or the delete-all question in the same spot).
-                    Item {
-                        x: Theme.spacingS
-                        width: parent.width - Theme.spacingS * 2
-                        height: 32
-
-                        StyledText {
-                            visible: !dict.confirmClear
-                            text: "Recent"
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
+                    ListHead {
+                        title: "Recent"
+                        count: dict.visibleTakes.length
+                        onOpenFolder: {
+                            dict.run(["folder"]);
+                            root.closePopout();
                         }
-
-                        ToastChip {
-                            visible: !dict.confirmClear && opacity > 0
-                        }
-
-                        Row {
-                            visible: !dict.confirmClear
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-
-                            IconBtn {
-                                iconName: "folder"
-                                tip: "Open folder"
-                                onClicked: {
-                                    dict.run(["folder"]);
-                                    root.closePopout();
-                                }
-                            }
-                            IconBtn {
-                                visible: dict.visibleTakes.length > 0
-                                iconName: "delete_sweep"
-                                tip: "Delete all (to trash)"
-                                onClicked: {
-                                    dict.confirmClear = true;
-                                    confirmTimer.restart();
-                                }
-                            }
-                        }
-
-                        Timer {
-                            id: confirmTimer
-                            interval: 5000
-                            onTriggered: dict.confirmClear = false
-                        }
-
-                        // Delete all? asks first, in the same row.
-                        Item {
-                            visible: dict.confirmClear
-                            anchors.fill: parent
-
-                            Row {
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 8
-                                DIcon {
-                                    name: "delete_sweep"
-                                    size: 18
-                                    color: Theme.error
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                StyledText {
-                                    text: "Delete all " + dict.visibleTakes.length + "?"
-                                    font.pixelSize: Theme.fontSizeMedium
-                                    font.weight: Font.Medium
-                                    color: Theme.surfaceText
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-                            Row {
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 6
-                                PillBtn {
-                                    width: 80
-                                    height: 28
-                                    ghost: true
-                                    label: "Cancel"
-                                    onClicked: dict.confirmClear = false
-                                }
-                                Rectangle {
-                                    width: 76
-                                    height: 28
-                                    radius: 14
-                                    color: delArea.containsMouse ? Theme.withAlpha(Theme.error, 0.26) : Theme.withAlpha(Theme.error, 0.16)
-                                    StyledText {
-                                        anchors.centerIn: parent
-                                        text: "Delete"
-                                        font.pixelSize: Theme.fontSizeMedium
-                                        font.weight: Font.Medium
-                                        color: Theme.error
-                                    }
-                                    MouseArea {
-                                        id: delArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            dict.confirmClear = false;
-                                            Proc.runCommand(null, [dict.bin, "trash", "all"], (out, code) => {
-                                                root.showToast(code === 0 ? "All moved to trash" : "Delete failed");
-                                                dict.showAll = false;
-                                                dict.refreshList();
-                                            }, 0, 20000, root);
-                                        }
-                                    }
-                                }
-                            }
-                        }
+                        onClearAll: Proc.runCommand(null, [dict.bin, "trash", "all"], (out, code) => {
+                            root.showToast(code === 0 ? "All moved to trash" : "Delete failed");
+                            dict.showAll = false;
+                            dict.refreshList();
+                        }, 0, 20000, root)
                     }
 
                     StyledText {
@@ -1518,32 +1563,15 @@ PluginComponent {
                         }
                     }
 
-                    Rectangle {
-                        visible: dict.visibleTakes.length > 5
-                        x: Theme.spacingS
-                        width: parent.width - Theme.spacingS * 2
-                        height: 34
-                        radius: Theme.cornerRadius
-                        color: moreArea.containsMouse ? Theme.withAlpha(Theme.primary, 0.08) : "transparent"
-                        StyledText {
-                            anchors.centerIn: parent
-                            text: dict.showAll ? "Show less" : "Show " + (dict.visibleTakes.length - 5) + " more"
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
-                            color: Theme.primary
-                        }
-                        MouseArea {
-                            id: moreArea
-                            anchors.fill: parent
-                            hoverEnabled: true
-                            cursorShape: Qt.PointingHandCursor
-                            onClicked: dict.showAll = !dict.showAll
-                        }
+                    MoreBtn {
+                        count: dict.visibleTakes.length
+                        open: dict.showAll
+                        onToggled: dict.showAll = !dict.showAll
                     }
                 }
             }
 
-            // ---- Meeting: Recordings ----------------------------------------------------
+            // ---- Meeting: Recent --------------------------------------------------------
 
             Component {
                 id: meetBody
@@ -1551,31 +1579,18 @@ PluginComponent {
                 Column {
                     spacing: Theme.spacingS
 
-                    Item {
-                        x: Theme.spacingS
-                        width: parent.width - Theme.spacingS * 2
-                        height: 32
-
-                        StyledText {
-                            text: meet.recordings.length > 0 ? "Recordings · " + meet.recordings.length : "Recordings"
-                            font.pixelSize: Theme.fontSizeMedium
-                            font.weight: Font.Medium
-                            color: Theme.surfaceVariantText
-                            anchors.verticalCenter: parent.verticalCenter
+                    ListHead {
+                        title: "Recent"
+                        count: meet.recordings.length
+                        onOpenFolder: {
+                            meet.run(["folder"]);
+                            root.closePopout();
                         }
-
-                        ToastChip {}
-
-                        IconBtn {
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
-                            iconName: "folder"
-                            tip: "Open folder"
-                            onClicked: {
-                                meet.run(["folder"]);
-                                root.closePopout();
-                            }
-                        }
+                        onClearAll: meet.run(["delete", "all"], (out, code) => {
+                            root.showToast(code === 0 ? "All moved to trash" : "Delete failed");
+                            meet.showAll = false;
+                            meet.refreshList();
+                        })
                     }
 
                     StyledText {
@@ -1586,14 +1601,15 @@ PluginComponent {
                         color: Theme.surfaceVariantText
                     }
 
-                    // All recordings; only the visible rows are built, so a long list stays fast.
+                    // The newest 5, or all of them (only the visible rows are built,
+                    // so a long list stays fast).
                     ListView {
                         id: list
                         visible: count > 0
                         x: Theme.spacingS
                         width: parent.width - Theme.spacingS * 2
-                        height: Math.min(count, 5) * 54
-                        model: meet.recordings
+                        height: Math.min(count, meet.showAll ? 7 : 5) * 54
+                        model: meet.showAll ? meet.recordings : meet.recordings.slice(0, 5)
                         clip: true
                         boundsBehavior: Flickable.StopAtBounds
                         interactive: contentHeight > height
@@ -1608,6 +1624,12 @@ PluginComponent {
                             width: list.width
                             item: modelData
                         }
+                    }
+
+                    MoreBtn {
+                        count: meet.recordings.length
+                        open: meet.showAll
+                        onToggled: meet.showAll = !meet.showAll
                     }
                 }
             }
