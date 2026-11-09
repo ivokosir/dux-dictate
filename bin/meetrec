@@ -1,0 +1,378 @@
+#!/usr/bin/env bash
+# meetrec — record a meeting (what you hear + your mic) in the background.
+#
+#   meetrec start [name]   start recording (runs as a user service, survives shell restarts)
+#   meetrec stop           stop and save
+#   meetrec toggle         start or stop
+#   meetrec status         JSON: {"recording":bool,"file":..,"started":ms,"size":bytes}
+#   meetrec list [n]       JSON list of recordings, newest first (all, or the newest n)
+#   meetrec copy <file>    copy the file itself (paste into a chat, file manager, browser)
+#   meetrec open <file>    open in the default player
+#   meetrec reveal <file>  show it selected in the file manager
+#   meetrec rename <file> <name>  rename (keeps the date; works while recording)
+#   meetrec delete <file>  move it (and its transcript) to the trash
+#   meetrec transcribe <file>  ElevenLabs transcript with speakers, saved next to it as .txt
+#   meetrec copy-text <file>   copy the transcript text
+#   meetrec folder         open the recordings folder
+set -euo pipefail
+
+# XDG music folder (~/Music unless user-dirs.dirs says otherwise).
+MUSIC_DIR="$(xdg-user-dir MUSIC 2>/dev/null || true)"
+[ -n "$MUSIC_DIR" ] && [ "$MUSIC_DIR" != "$HOME" ] || MUSIC_DIR="$HOME/Music"
+OUT_DIR="${MEETREC_DIR:-$MUSIC_DIR/Meetings}"
+UNIT="meetrec"
+STATE_DIR="${XDG_RUNTIME_DIR:-/tmp}/meetrec"
+STATE="$STATE_DIR/current"
+TX_DIR="$STATE_DIR/tx"       # one file per transcription: "<audio>\n<pid>\n<error>"
+EVENTS="$STATE_DIR/events"   # rewritten when a transcription starts or ends (the bar watches it)
+
+json_str() { # escape for JSON
+  local s=${1//\\/\\\\}
+  s=${s//\"/\\\"}
+  s=${s//$'\n'/ }
+  printf '"%s"' "$s"
+}
+
+is_recording() { systemctl --user is-active --quiet "$UNIT.service"; }
+
+file_uri() {
+  python3 -c 'import sys, urllib.parse; print("file://" + urllib.parse.quote(sys.argv[1]))' "$1"
+}
+
+# The name is exactly what follows the date in the file name, so it is kept
+# as typed. Only characters a file name cannot hold are dropped
+# (also the ones Windows refuses, so files copy anywhere).
+slug() {
+  python3 -c '
+import re, sys
+s = re.sub(r"[\x00-\x1f\x7f/\\:*?\"<>|]", "", sys.argv[1])
+s = re.sub(r"\s+", " ", s).strip(" .")
+print(s[:120].rstrip(" .") or "Meeting")' "$1"
+}
+
+need_file() {
+  [ -n "${1:-}" ] && [ -f "$1" ] || { echo "no such file: ${1:-}" >&2; exit 1; }
+}
+
+cmd_start() {
+  if is_recording; then echo "already recording" >&2; exit 0; fi
+  mkdir -p "$OUT_DIR" "$STATE_DIR"
+  local name; name="$(slug "${1:-Meeting}")"
+  local out="$OUT_DIR/$(date +%Y-%m-%d_%H-%M-%S)_${name}.ogg"
+  # Current default devices, so a headset plugged in a minute ago is used.
+  local sink_monitor mic
+  sink_monitor="$(pactl get-default-sink).monitor"
+  mic="$(pactl get-default-source)"
+  systemctl --user reset-failed "$UNIT.service" 2>/dev/null || true
+  # ffmpeg finalizes the file on SIGINT; that exits 255, which counts as success.
+  systemd-run --user --quiet --collect --unit="$UNIT" \
+    --description="Meeting recording" \
+    -p KillSignal=SIGINT -p SuccessExitStatus=255 -p TimeoutStopSec=15 \
+    -p ExecStopPost="/usr/bin/truncate -s 0 $STATE" \
+    ffmpeg -hide_banner -loglevel warning -nostdin \
+      -thread_queue_size 1024 -f pulse -i "$sink_monitor" \
+      -thread_queue_size 1024 -f pulse -i "$mic" \
+      -filter_complex "amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95" \
+      -ac 1 -c:a libopus -b:a 32k -flush_packets 1 \
+      "$out"
+  printf '%s\n%s\n' "$out" "$(date +%s%3N)" > "$STATE"
+  echo "$out"
+}
+
+cmd_stop() {
+  local out=""
+  [ -s "$STATE" ] && out="$(sed -n 1p "$STATE")"
+  if is_recording; then
+    systemctl --user stop "$UNIT.service"
+  fi
+  : > "$STATE"
+  [ -n "$out" ] && [ -f "$out" ] || exit 0
+  echo "$out"
+  # A notification with quick actions; runs on its own so stop returns at once.
+  if command -v notify-send >/dev/null; then
+    setsid -f bash -c '
+      out=$1; self=$2
+      act=$(notify-send -a "Meeting Recorder" -i audio-x-generic \
+        -A copy="Copy file" -A reveal="Show in folder" \
+        "Recording saved" "$(basename "$out") · $(du -h "$out" | cut -f1)")
+      case "$act" in
+        copy) "$self" copy "$out" ;;
+        reveal) "$self" reveal "$out" ;;
+      esac' _ "$out" "$(readlink -f "$0")" >/dev/null 2>&1 </dev/null
+  fi
+}
+
+cmd_status() {
+  if is_recording && [ -s "$STATE" ]; then
+    local out started size=0
+    out="$(sed -n 1p "$STATE")"
+    started="$(sed -n 2p "$STATE")"
+    [ -f "$out" ] && size=$(stat -c %s "$out")
+    printf '{"recording":true,"file":%s,"started":%s,"size":%s,"dir":%s}\n' \
+      "$(json_str "$out")" "${started:-0}" "$size" "$(json_str "$OUT_DIR")"
+  else
+    printf '{"recording":false,"dir":%s}\n' "$(json_str "$OUT_DIR")"
+  fi
+}
+
+# One process for the whole list. Ogg/Opus length comes from the last page's
+# granule position (no decoding); other formats fall back to ffprobe.
+cmd_list() {
+  local current=""
+  is_recording && [ -s "$STATE" ] && current="$(sed -n 1p "$STATE")"
+  python3 - "$OUT_DIR" "${1:-0}" "$current" "$TX_DIR" <<'PY'
+import json, os, subprocess, sys
+
+out_dir, n, current, tx_dir = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
+EXTS = (".ogg", ".opus", ".mp3", ".wav", ".m4a")
+
+def ogg_seconds(path, size):
+    with open(path, "rb") as f:
+        head = f.read(4096)
+        i = head.find(b"OpusHead")
+        if i < 0:
+            return None
+        pre_skip = int.from_bytes(head[i + 10:i + 12], "little")
+        for back in (8192, 65536):  # the last page is small; read more only if needed
+            f.seek(max(0, size - back))
+            tail = f.read()
+            j = tail.rfind(b"OggS")
+            if j >= 0:
+                break
+    if j < 0 or j + 14 > len(tail):
+        return None
+    granule = int.from_bytes(tail[j + 6:j + 14], "little")
+    if granule == 0xFFFFFFFFFFFFFFFF:
+        return None
+    return max(0.0, (granule - pre_skip) / 48000)
+
+def probe_seconds(path):
+    try:
+        r = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration",
+                            "-of", "csv=p=0", path], capture_output=True, text=True, timeout=5)
+        return float(r.stdout.strip())
+    except Exception:
+        return 0.0
+
+items = []
+try:
+    with os.scandir(out_dir) as it:
+        for e in it:
+            if e.is_file() and e.name.lower().endswith(EXTS) and e.path != current:
+                st = e.stat()
+                items.append((st.st_mtime, e, st))
+except FileNotFoundError:
+    pass
+
+# Transcriptions running or failed, by recording path.
+jobs = {}
+try:
+    for e in os.scandir(tx_dir):
+        if e.name.endswith(".tmp"):
+            continue
+        try:
+            lines = open(e.path, encoding="utf-8").read().split("\n")
+        except OSError:
+            continue
+        audio, pid, err = (lines + ["", "", ""])[:3]
+        if err:
+            jobs[audio] = ("failed", err)
+            continue
+        try:
+            os.kill(int(pid), 0)
+            jobs[audio] = ("running", "")
+        except ValueError:
+            jobs[audio] = ("running", "")  # just started, pid not written yet
+        except ProcessLookupError:
+            jobs[audio] = ("failed", "Transcription stopped")
+        except PermissionError:
+            jobs[audio] = ("running", "")
+except FileNotFoundError:
+    pass
+
+items.sort(key=lambda t: t[0], reverse=True)
+result = []
+for mtime, e, st in (items[:n] if n > 0 else items):
+    dur = None
+    if e.name.lower().endswith((".ogg", ".opus")):
+        try:
+            dur = ogg_seconds(e.path, st.st_size)
+        except OSError:
+            dur = None
+    if dur is None:
+        dur = probe_seconds(e.path)
+    txt = os.path.splitext(e.path)[0] + ".txt"
+    tx, err = jobs.get(e.path, ("", ""))
+    result.append({"path": e.path, "name": e.name, "size": st.st_size,
+                   "mtime": int(mtime), "duration": round(dur, 2),
+                   "transcript": txt if os.path.isfile(txt) else "",
+                   "tx": tx, "txError": err})
+print(json.dumps(result, ensure_ascii=False))
+PY
+}
+
+cmd_rename() {
+  need_file "${1:-}"
+  local file dir base ext prefix name new n=2
+  file="$(readlink -f "$1")"
+  dir="$(dirname "$file")"; base="$(basename "$file")"
+  ext="${base##*.}"; [ "$ext" = "$base" ] && ext="ogg"
+  name="$(slug "${2:-}")"
+  # Keep the date/time the recording started.
+  if [[ "$base" =~ ^([0-9]{4}-[0-9]{2}-[0-9]{2}_[0-9]{2}-[0-9]{2}(-[0-9]{2})?_) ]]; then
+    prefix="${BASH_REMATCH[1]}"
+  else
+    prefix="$(date -r "$file" +%Y-%m-%d_%H-%M-%S)_"
+  fi
+  new="$dir/$prefix$name.$ext"
+  if [ "$new" = "$file" ]; then echo "$file"; return; fi
+  while [ -e "$new" ]; do new="$dir/$prefix$name ($n).$ext"; n=$((n + 1)); done
+  mv -n "$file" "$new"
+  # The transcript follows its recording.
+  local old_txt="${file%.*}.txt" new_txt="${new%.*}.txt"
+  if [ -f "$old_txt" ] && [ ! -e "$new_txt" ]; then mv -n "$old_txt" "$new_txt"; fi
+  # A transcription in progress saves next to the new name.
+  local job; job="$(job_of "$file")"
+  if [ -n "$job" ]; then
+    { printf '%s\n' "$new"; sed -n '2,$p' "$job"; } > "$job.tmp" && mv "$job.tmp" "$job"
+  fi
+  # Renaming the file being recorded is fine: ffmpeg keeps writing to it.
+  if [ -f "$STATE" ] && [ "$(sed -n 1p "$STATE")" = "$file" ]; then
+    local started; started="$(sed -n 2p "$STATE")"
+    printf '%s\n%s\n' "$new" "$started" > "$STATE"
+  fi
+  echo "$new"
+}
+
+api_key() {
+  if [ -n "${ELEVENLABS_API_KEY:-}" ]; then printf '%s' "$ELEVENLABS_API_KEY"; return; fi
+  local f
+  for f in "$HOME/.config/meetrec/api-key" "$HOME/.config/dictate/api-key" \
+           "$HOME/.config/voxtype-elevenlabs-adapter/api-key"; do
+    if [ -s "$f" ]; then tr -d '\r\n' < "$f"; return; fi
+  done
+  return 1
+}
+
+job_of() { # the transcription job file of a recording ("" if none)
+  local job
+  for job in "$TX_DIR"/job.*; do
+    [ -f "$job" ] && [ "$(sed -n 1p "$job")" = "$1" ] && { echo "$job"; return; }
+  done
+  return 0
+}
+
+# Starts the upload in the background and returns at once.
+cmd_transcribe() {
+  need_file "${1:-}"
+  local file job; file="$(readlink -f "$1")"
+  if [ -s "$STATE" ] && [ "$(sed -n 1p "$STATE")" = "$file" ]; then
+    echo "still recording this one" >&2; exit 1
+  fi
+  api_key >/dev/null || { echo "No ElevenLabs key. Put it in ~/.config/meetrec/api-key" >&2; exit 1; }
+  mkdir -p "$TX_DIR"
+  job="$(job_of "$file")"
+  if [ -n "$job" ] && [ -z "$(sed -n 3p "$job")" ]; then
+    echo "already transcribing" >&2; exit 0
+  fi
+  [ -n "$job" ] || job="$(mktemp "$TX_DIR/job.XXXXXX")"
+  printf '%s\n' "$file" > "$job"
+  date +%s%N > "$EVENTS"
+  setsid -f "$(readlink -f "$0")" _tx "$job" >/dev/null 2>&1 </dev/null
+}
+
+# The background part: upload, save "<recording>.txt" next to it, tell the bar.
+cmd__tx() {
+  local job="$1" resp code err file
+  printf '%s\n%s\n' "$(sed -n 1p "$job")" "$$" > "$job"
+  file="$(sed -n 1p "$job")"
+  resp="$(mktemp)"
+  code=$(curl -sS --max-time 3600 -o "$resp" -w '%{http_code}' \
+    -H @<(printf 'xi-api-key: %s\n' "$(api_key)") \
+    -F model_id=scribe_v2 -F diarize=true -F tag_audio_events=true \
+    -F 'additional_formats=[{"format":"txt","include_speakers":true,"include_timestamps":true}]' \
+    -F "file=@-;filename=$(basename "$file" | tr -d ';"')" \
+    https://api.elevenlabs.io/v1/speech-to-text < "$file" 2>"$resp.err") || code=000
+  # Renamed meanwhile? Save next to the new name.
+  file="$(sed -n 1p "$job")"
+  err=$(python3 - "$resp" "$code" "${file%.*}.txt" "$resp.err" <<'PY'
+import json, os, sys
+resp, code, out, curl_err = sys.argv[1:5]
+def fail(msg):
+    print(" ".join(msg.split())[:200])
+    sys.exit(0)
+if code == "000":
+    fail("No connection: " + open(curl_err).read())
+try:
+    r = json.load(open(resp, encoding="utf-8"))
+except Exception:
+    fail("ElevenLabs said " + code)
+if code != "200":
+    d = r.get("detail", r) if isinstance(r, dict) else r
+    fail("ElevenLabs: " + str(d.get("message", d) if isinstance(d, dict) else d))
+# ElevenLabs' own text export: "00:00:04,400 --> 00:00:09,820 [speaker_1]" + what was said.
+text = next((f.get("content", "") for f in r.get("additional_formats") or []
+             if f.get("requested_format") == "txt" and not f.get("is_base64_encoded")), None)
+if text is None:
+    text = r.get("text", "")
+if not text.strip():
+    text = "(no speech)"
+tmp = out + ".part"
+with open(tmp, "w", encoding="utf-8") as f:
+    f.write(text.rstrip("\n") + "\n")
+os.replace(tmp, out)
+PY
+)
+  rm -f "$resp" "$resp.err"
+  if [ -n "$err" ]; then
+    printf '%s\n\n%s\n' "$file" "$err" > "$job"
+    date +%s%N > "$EVENTS"
+    notify-send -a "Meeting Recorder" -u critical "Transcription failed" "$err" 2>/dev/null || true
+    return 1
+  fi
+  rm -f "$job"
+  date +%s%N > "$EVENTS"
+  local txt="${file%.*}.txt" act
+  act=$(notify-send -a "Meeting Recorder" -i text-x-generic \
+    -A copy="Copy transcript" -A open="Open" \
+    "Transcript ready" "$(basename "$txt")" 2>/dev/null) || true
+  case "$act" in
+    copy) wl-copy --type text/plain < "$txt" ;;
+    open) setsid -f xdg-open "$txt" >/dev/null 2>&1 ;;
+  esac
+}
+
+cmd_delete() {
+  need_file "${1:-}"
+  local file job; file="$(readlink -f "$1")"
+  gio trash "$file"
+  if [ -f "${file%.*}.txt" ]; then gio trash "${file%.*}.txt"; fi
+  job="$(job_of "$file")"
+  if [ -n "$job" ]; then rm -f "$job"; fi
+}
+
+cmd_reveal() {
+  need_file "${1:-}"
+  local uri; uri="$(file_uri "$(readlink -f "$1")")"
+  busctl --user call org.freedesktop.FileManager1 /org/freedesktop/FileManager1 \
+    org.freedesktop.FileManager1 ShowItems ass 1 "$uri" "" >/dev/null 2>&1 \
+    || setsid -f xdg-open "$(dirname "$1")" >/dev/null 2>&1
+}
+
+case "${1:-}" in
+  start) shift; cmd_start "$@" ;;
+  stop) cmd_stop ;;
+  toggle) shift; if is_recording; then cmd_stop; else cmd_start "$@"; fi ;;
+  status) cmd_status ;;
+  list) shift; cmd_list "$@" ;;
+  copy) need_file "${2:-}"; printf '%s\r\n' "$(file_uri "$(readlink -f "$2")")" | wl-copy --type text/uri-list ;;
+  open) need_file "${2:-}"; setsid -f xdg-open "$2" >/dev/null 2>&1 ;;
+  reveal) cmd_reveal "${2:-}" ;;
+  rename) cmd_rename "${2:-}" "${3:-}" ;;
+  delete) cmd_delete "${2:-}" ;;
+  transcribe) cmd_transcribe "${2:-}" ;;
+  _tx) cmd__tx "$2" ;;
+  copy-text) need_file "${2:-}"; t="${2%.*}.txt"; need_file "$t"; wl-copy --type text/plain < "$t" ;;
+  folder) mkdir -p "$OUT_DIR"; setsid -f xdg-open "$OUT_DIR" >/dev/null 2>&1 ;;
+  *) sed -n '2,16p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

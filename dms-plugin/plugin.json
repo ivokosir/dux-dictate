@@ -1,8 +1,8 @@
 {
   "id": "dictate",
-  "name": "Dictate",
-  "description": "Talk and the text is pasted where you type (ElevenLabs Scribe). Click the mic to start or stop; a card shows while you talk.",
-  "version": "0.1.0",
+  "name": "Dictate & Meeting",
+  "description": "One bar button, two modes. Dictate: talk and the text is pasted (ElevenLabs Scribe). Meeting: record your mic + what you hear. Click the title in the popout to switch.",
+  "version": "0.2.0",
   "author": "dms-dictate contributors",
   "type": "composite",
   "capabilities": [

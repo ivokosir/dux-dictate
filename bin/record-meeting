@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# Record a meeting from the terminal: what you hear + your mic, in one file.
+# Usage: record-meeting [name]   — Ctrl+C to stop.
+# Same recorder as the bar widget, so the bar shows this recording too.
+set -euo pipefail
+meetrec="$(dirname "$(readlink -f "$0")")/meetrec"
+
+out="$("$meetrec" start "${1:-meeting}")"
+echo "Recording to: $out"
+echo "Press Ctrl+C to stop."
+trap '"$meetrec" stop >/dev/null; echo; echo "Saved: $out ($(du -h "$out" | cut -f1))"; exit 0' INT TERM
+while systemctl --user is-active --quiet meetrec.service; do sleep 1; done
+echo "Recording stopped. Saved: $out"
