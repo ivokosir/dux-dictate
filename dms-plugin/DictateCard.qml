@@ -107,9 +107,9 @@ PluginComponent {
         mic: ["mic_off", "Mic not working", ""],
         eleven: ["cloud_off", "Didn't go through", ""],
         livefail: ["cloud_off", "Live stopped", "full text copied"],
-        cleancopied: ["auto_awesome", "Cleaned text copied", ""],
-        nokey: ["key_off", "No ElevenLabs key", ""],
-        other: ["error", "Something went wrong", ""]
+        cleancopied: ["auto_awesome", "Cleaned & copied", ""],
+        nokey: ["key_off", "No API key", ""],
+        other: ["error", "Something failed", ""]
     })
     readonly property var prob: problemInfo[st.problem] || problemInfo.other
 

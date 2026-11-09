@@ -303,9 +303,9 @@ PluginComponent {
         mic: ["mic_off", "Mic not working", "Check the input device"],
         eleven: ["cloud_off", "Didn't go through", "Audio is saved. Retry sends it again"],
         livefail: ["cloud_off", "Live stopped", "The full text is on your clipboard"],
-        cleancopied: ["auto_awesome", "Cleaned text copied", "The raw text was typed live; the cleaned one is on your clipboard"],
-        nokey: ["key_off", "No ElevenLabs key", "Run: dictate set-key"],
-        other: ["error", "Something went wrong", ""]
+        cleancopied: ["auto_awesome", "Cleaned & copied", "The raw text was typed live; the cleaned one is on your clipboard"],
+        nokey: ["key_off", "No API key", "Add your ElevenLabs key: dictate set-key"],
+        other: ["error", "Something failed", ""]
     })
 
     component TakeRow: Item {
@@ -440,7 +440,9 @@ PluginComponent {
 
     // ---- popout --------------------------------------------------------------------------
 
-    popoutWidth: 400
+    // Wide enough that every problem title fits next to ⚡ and the 120 px slot
+    // (title gets ~188 px; the longest, "Didn't go through", is ~170 px at font scale 1.3).
+    popoutWidth: 460
 
     popoutContent: Component {
         PopoutComponent {
@@ -502,7 +504,9 @@ PluginComponent {
 
                         StyledText {
                             id: titleText
-                            text: head.prob ? head.prob[1] : root.phase === "down" ? "Service not running" : "Dictate"
+                            // Never wider than the space left, so a long title ends in "…".
+                            width: Math.min(implicitWidth, parent.width - (timerText.visible ? timerText.implicitWidth + parent.spacing : 0))
+                            text: head.prob ? head.prob[1] : root.phase === "down" ? "Service is off" : "Dictate"
                             font.pixelSize: Theme.fontSizeLarge
                             font.weight: Font.Medium
                             color: (head.prob && !head.notice) || root.phase === "down" ? Theme.error : Theme.surfaceText
@@ -519,6 +523,7 @@ PluginComponent {
                         }
 
                         StyledText {
+                            id: timerText
                             visible: root.recording
                             text: root.clock(root.nowMs - (Number(root.st.started_ms) || root.nowMs))
                             font.pixelSize: Theme.fontSizeMedium
