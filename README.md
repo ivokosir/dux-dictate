@@ -7,7 +7,7 @@ Talk, and the text is pasted where you are typing. Uses ElevenLabs Scribe direct
 - **Card:** a small pill in the top-right corner while you talk: glowing mic + timer. Put the mouse on it and it turns into ✕ (throw away), ✨ (clean up with Luna, then paste) and ✓ (paste). While it works the mic spins; problems show as a short red line. When it is done it just disappears.
 - **Popout:** one row that never moves: mic, Dictate (+ timer while talking), ⚡ Live, and Start / ✨ ✓ / Cancel / Retry. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open.
 - **Recent is just files:** every take is `~/Music/Dictations/<time>.ogg` (+ `.txt`, + `.clean.txt`). Not transcribed → ⟳ Transcribe. Transcribed → ✨ clean up (or copy the cleaned text), 📋 copy raw text. The last 20 are kept; older ones go to the trash.
-- **Two engines:** normal (default) uploads the audio when you stop. **Live** (⚡) streams it while you talk for a faster result; if live fails, it falls back to a normal upload.
+- **Two engines:** normal (default) uploads the audio when you stop and pastes it. **Live** (⚡) streams while you talk and *types* each sentence straight into the field about 0.3 s after you finish it (no Ctrl+V). While the popout is open it holds the text back, and ✨ with live puts the cleaned version on your clipboard (the raw one is already typed). If live fails before anything was typed, it falls back to a normal upload.
 - **No time limit:** the audio is written to disk while you talk, so long takes are fine and nothing is lost if something fails.
 
 ## Install

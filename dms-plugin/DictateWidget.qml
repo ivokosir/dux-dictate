@@ -302,6 +302,8 @@ PluginComponent {
         nospeech: ["voice_over_off", "No speech heard", ""],
         mic: ["mic_off", "Mic not working", "Check the input device"],
         eleven: ["cloud_off", "Didn't go through", "Audio is saved. Retry sends it again"],
+        livefail: ["cloud_off", "Live stopped", "The full text is on your clipboard"],
+        cleancopied: ["auto_awesome", "Cleaned text copied", "The raw text was typed live; the cleaned one is on your clipboard"],
         nokey: ["key_off", "No ElevenLabs key", "Run: dictate set-key"],
         other: ["error", "Something went wrong", ""]
     })
@@ -454,6 +456,7 @@ PluginComponent {
                 Item {
                     id: head
                     readonly property var prob: root.problem ? (root.problemInfo[root.st.problem] || root.problemInfo.other) : null
+                    readonly property bool notice: root.problem && root.st.problem === "cleancopied"
                     readonly property bool locked: root.recording || root.busy || !root.up
 
                     x: Theme.spacingS
@@ -466,7 +469,8 @@ PluginComponent {
                         height: 40
                         radius: 20
                         anchors.verticalCenter: parent.verticalCenter
-                        color: head.prob ? Theme.withAlpha(Theme.error, 0.14)
+                        color: head.prob && !head.notice ? Theme.withAlpha(Theme.error, 0.14)
+                            : head.notice ? Theme.withAlpha(Theme.primary, 0.16)
                             : (root.recording || root.busy) ? Theme.withAlpha(Theme.primary, 0.16)
                             : Theme.surfaceContainerHigh
 
@@ -483,7 +487,7 @@ PluginComponent {
                             name: head.prob ? head.prob[0] : root.phase === "down" ? "mic_off" : root.phase === "cleaning" ? "auto_awesome" : "mic"
                             filled: true
                             size: 22
-                            color: head.prob ? Theme.error : (root.recording || root.busy) ? Theme.primary : Theme.surfaceVariantText
+                            color: head.prob && !head.notice ? Theme.error : (root.recording || root.busy || head.notice) ? Theme.primary : Theme.surfaceVariantText
                         }
                     }
 
@@ -501,7 +505,7 @@ PluginComponent {
                             text: head.prob ? head.prob[1] : root.phase === "down" ? "Service not running" : "Dictate"
                             font.pixelSize: Theme.fontSizeLarge
                             font.weight: Font.Medium
-                            color: head.prob || root.phase === "down" ? Theme.error : Theme.surfaceText
+                            color: (head.prob && !head.notice) || root.phase === "down" ? Theme.error : Theme.surfaceText
                             elide: Text.ElideRight
                             anchors.verticalCenter: parent.verticalCenter
 

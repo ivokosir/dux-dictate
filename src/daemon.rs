@@ -88,6 +88,22 @@ enum Stop {
     Cancel,
 }
 
+/// What live typing got done.
+#[derive(Default)]
+struct Typed {
+    /// Something was typed into the app.
+    any: bool,
+    /// Pieces still held back (the popout was open).
+    backlog: Vec<String>,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum Delivered {
+    /// The text is already in the app (typed live).
+    Typed,
+    Not,
+}
+
 struct Failed {
     stamp: String,
     mode: Mode,
@@ -165,6 +181,7 @@ impl Daemon {
             "nospeech" => Some(3),
             "cleanfail" => Some(6),
             "paste" => Some(8),
+            "cleancopied" => Some(5),
             _ => Some(10),
         };
         self.update(|s| {
@@ -293,10 +310,19 @@ impl Daemon {
         // Live mode: audio also goes to the WebSocket while we record.
         let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
         let mut audio_tx = live.then_some(audio_tx);
+        // Live mode types each finished piece of text straight into the focused app.
+        let mut typer_task = None;
         let mut stream_task = if live {
             let key = key.clone();
             let language = config.language.clone();
-            Some(tokio::spawn(async move { eleven::stream(&key, &language, audio_rx, |_| {}).await }))
+            let (seg_tx, seg_rx) = mpsc::unbounded_channel::<String>();
+            typer_task = Some(tokio::spawn(self.clone().typer(seg_rx)));
+            Some(tokio::spawn(async move {
+                eleven::stream(&key, &language, audio_rx, move |seg| {
+                    let _ = seg_tx.send(seg);
+                })
+                .await
+            }))
         } else {
             drop(audio_rx);
             None
@@ -360,6 +386,9 @@ impl Daemon {
                 if let Some(task) = stream_task.take() {
                     task.abort();
                 }
+                if let Some(task) = typer_task.take() {
+                    task.abort();
+                }
                 let _ = encoder.finish().await;
                 remove_take(&self);
                 return self.idle(id);
@@ -369,6 +398,9 @@ impl Daemon {
 
         if bytes < BYTES_PER_SEC * 3 / 10 {
             if let Some(task) = stream_task.take() {
+                task.abort();
+            }
+            if let Some(task) = typer_task.take() {
                 task.abort();
             }
             let _ = encoder.finish().await;
@@ -391,6 +423,7 @@ impl Daemon {
         self.files_changed();
 
         let mut text = String::new();
+        let mut typed = Typed::default();
         if let Some(task) = stream_task.take() {
             match tokio::time::timeout(Duration::from_secs(10), task).await {
                 Ok(Ok(Ok(t))) => text = t,
@@ -398,6 +431,12 @@ impl Daemon {
                 _ => eprintln!("dictate: live did not finish, uploading instead"),
             }
         }
+        if let Some(task) = typer_task.take() {
+            // The stream is done, so the typer gets no more pieces and finishes.
+            typed = tokio::time::timeout(Duration::from_secs(10), task).await.ok().and_then(|r| r.ok()).unwrap_or_default();
+        }
+        // Live broke halfway: part is already typed, so don't paste on top of it.
+        let live_broke = typed.any && text.trim().is_empty();
         if text.trim().is_empty() {
             let result = match std::fs::read(&ogg) {
                 Ok(data) => eleven::transcribe(&self.http, &key, &config.language, data).await,
@@ -411,10 +450,62 @@ impl Daemon {
                 }
             }
         }
-        self.deliver(id, stamp, text, final_mode, out, &config).await;
+        if live_broke {
+            let _ = files::write_text(&files::raw(&self.dir, &stamp), &text);
+            let _ = output::copy(&text).await;
+            self.files_changed();
+            return self.problem(id, "livefail", "Live stopped halfway; the full text is on your clipboard".into(), None);
+        }
+        // Pieces typed live are done; whatever is left (popout was open) goes out now.
+        let rest = if typed.any && out == Out::Paste {
+            for piece in &typed.backlog {
+                if let Err(error) = output::type_text(&format!(" {piece}")).await {
+                    eprintln!("dictate: typing failed: {error:#}");
+                }
+            }
+            Delivered::Typed
+        } else {
+            Delivered::Not
+        };
+        self.deliver(id, stamp, text, final_mode, out, rest, &config).await;
     }
 
-    async fn deliver(self: &Arc<Self>, id: u64, stamp: String, text: String, mode: Mode, out: Out, config: &Config) {
+    /// Types live pieces as they arrive, but holds them while the popout is open
+    /// (it has the keyboard). Returns what is still held at the end.
+    async fn typer(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<String>) -> Typed {
+        let mut typed = Typed::default();
+        let mut held: std::collections::VecDeque<String> = Default::default();
+        loop {
+            tokio::select! {
+                piece = rx.recv() => match piece {
+                    Some(p) => held.push_back(p),
+                    None => break,
+                },
+                _ = tokio::time::sleep(Duration::from_millis(200)), if !held.is_empty() => {}
+            }
+            while !self.snap.borrow().popout {
+                let Some(piece) = held.pop_front() else { break };
+                let text = if typed.any { format!(" {piece}") } else { piece };
+                match output::type_text(&text).await {
+                    Ok(()) => typed.any = true,
+                    Err(error) => eprintln!("dictate: typing failed: {error:#}"),
+                }
+            }
+        }
+        typed.backlog = held.into();
+        typed
+    }
+
+    async fn deliver(
+        self: &Arc<Self>,
+        id: u64,
+        stamp: String,
+        text: String,
+        mode: Mode,
+        out: Out,
+        done: Delivered,
+        config: &Config,
+    ) {
         if !self.is_current(id) {
             return;
         }
@@ -442,9 +533,13 @@ impl Daemon {
                 return;
             }
         }
-        let delivered = match out {
-            Out::Paste => output::paste(&text).await,
-            Out::Copy => output::copy(&text).await,
+        // Live already typed the raw text: a cleaned version can only go to the clipboard.
+        let cleaned_after_typing = done == Delivered::Typed && mode == Mode::Luna && clean_failed.is_none();
+        let delivered = match (out, done) {
+            (Out::Copy, _) => output::copy(&text).await,
+            (Out::Paste, Delivered::Typed) if cleaned_after_typing => output::copy(&text).await,
+            (Out::Paste, Delivered::Typed) => Ok(()),
+            (Out::Paste, Delivered::Not) => output::paste(&text).await,
         };
         files::prune(&self.dir, config.keep, &stamp);
         self.files_changed();
@@ -453,6 +548,9 @@ impl Daemon {
         }
         if let Some(message) = clean_failed {
             return self.problem(id, "cleanfail", message, None);
+        }
+        if cleaned_after_typing {
+            return self.problem(id, "cleancopied", String::new(), None);
         }
         self.idle(id);
     }
@@ -479,7 +577,7 @@ impl Daemon {
             }
             .await;
             match result {
-                Ok(text) => d.deliver(id, stamp, text, mode, out, &config).await,
+                Ok(text) => d.deliver(id, stamp, text, mode, out, Delivered::Not, &config).await,
                 Err(error) => d.problem(id, "eleven", format!("{error:#}"), Some(Failed { stamp, mode, out })),
             }
         });

@@ -58,14 +58,20 @@ fn short_error(body: &str) -> String {
 }
 
 /// Streams audio from `audio` until the channel closes, then commits and
-/// returns the full transcript. `on_text` gets the live text as it grows.
+/// returns the full transcript. `on_segment` gets each finished piece of text
+/// as soon as ElevenLabs commits it (after a short pause in speech), and the
+/// last unfinished piece at the end, so the caller can type it right away.
 pub async fn stream(
     key: &str,
     language: &str,
     mut audio: mpsc::UnboundedReceiver<Vec<u8>>,
-    on_text: impl Fn(String),
+    on_segment: impl Fn(String),
 ) -> Result<String> {
-    let mut url = format!("{WS}?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad");
+    // A piece is finished after 0.3 s of silence, so live text lands right after
+    // each sentence (the default waits much longer, so nothing appeared until the end).
+    let mut url = format!(
+        "{WS}?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad&vad_silence_threshold_secs=0.3"
+    );
     if !language.is_empty() && language != "auto" {
         url.push_str(&format!("&language_code={language}"));
     }
@@ -130,15 +136,14 @@ pub async fn stream(
                 match kind {
                     "partial_transcript" => {
                         partial = v["text"].as_str().unwrap_or("").to_owned();
-                        on_text(joined(&committed, &partial));
                     }
                     "committed_transcript" => {
                         let t = v["text"].as_str().unwrap_or("").trim().to_owned();
                         if !t.is_empty() {
+                            on_segment(t.clone());
                             committed.push(t);
                         }
                         partial.clear();
-                        on_text(joined(&committed, &partial));
                         if closing {
                             commit_after_close = true;
                         }
@@ -166,5 +171,8 @@ pub async fn stream(
     }
 
     let _ = tx.send(Message::Close(None)).await;
+    if !partial.trim().is_empty() {
+        on_segment(partial.trim().to_owned());
+    }
     Ok(joined(&committed, &partial))
 }

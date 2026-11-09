@@ -29,6 +29,9 @@ PluginComponent {
     readonly property bool recording: phase === "recording"
     readonly property bool busy: phase === "transcribing" || phase === "cleaning"
     readonly property bool problem: phase === "problem"
+    // Not every message is bad news: "cleaned text copied" is just information.
+    readonly property bool notice: problem && st.problem === "cleancopied"
+    readonly property bool bad: problem && !notice
     readonly property bool shown: (recording || busy || problem) && st.popout !== true
 
     function run(args) {
@@ -103,6 +106,8 @@ PluginComponent {
         nospeech: ["voice_over_off", "No speech heard", ""],
         mic: ["mic_off", "Mic not working", ""],
         eleven: ["cloud_off", "Didn't go through", ""],
+        livefail: ["cloud_off", "Live stopped", "full text copied"],
+        cleancopied: ["auto_awesome", "Cleaned text copied", ""],
         nokey: ["key_off", "No ElevenLabs key", ""],
         other: ["error", "Something went wrong", ""]
     })
@@ -229,7 +234,7 @@ PluginComponent {
             radius: height / 2
             color: Theme.hostSurface
             border.width: 1
-            border.color: root.problem ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.outlineVariant, 0.55)
+            border.color: root.bad ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.outlineVariant, 0.55)
             opacity: root.shown ? 1 : 0
             clip: true
 
@@ -283,9 +288,11 @@ PluginComponent {
                     }
                 }
 
+                // Text has no circle around it: 7 px more after the timer so it ends
+                // as far from the edge as an icon glyph does (6 + 1 + 7 = 14 px).
                 Morph {
                     on: !card.hovered
-                    width: timerText.implicitWidth
+                    width: timerText.implicitWidth + 7
                     height: root.unit
                     StyledText {
                         id: timerText
@@ -356,7 +363,7 @@ PluginComponent {
                     Rectangle {
                         anchors.fill: parent
                         radius: width / 2
-                        color: root.problem ? Theme.withAlpha(Theme.error, 0.14) : Theme.withAlpha(Theme.primary, 0.14)
+                        color: root.bad ? Theme.withAlpha(Theme.error, 0.14) : Theme.withAlpha(Theme.primary, 0.14)
                     }
                     DSpinner {
                         anchors.fill: parent
@@ -371,7 +378,7 @@ PluginComponent {
                         name: root.problem ? root.prob[0] : root.phase === "cleaning" ? "auto_awesome" : "mic"
                         filled: true
                         size: 18
-                        color: root.problem ? Theme.error : Theme.primary
+                        color: root.bad ? Theme.error : Theme.primary
                     }
                 }
 
