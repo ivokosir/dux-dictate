@@ -47,11 +47,16 @@ PluginComponent {
         running: true
         stdout: SplitParser {
             onRead: data => {
+                // Mic level lines ("L 0.42") are only for the card.
+                if (data.charCodeAt(0) === 76)
+                    return;
                 try {
                     const next = JSON.parse(data);
-                    // Level ticks arrive ~20x a second; skip them unless something else changed.
-                    if (root.st.state === next.state && root.st.text === next.text && root.st.streaming === next.streaming
-                            && root.st.history?.length === next.history?.length && root.st.daemon === next.daemon)
+                    // Live words change the text often; the bar doesn't show text, so skip those.
+                    const h = root.st.history, nh = next.history;
+                    if (root.st.state === next.state && root.st.streaming === next.streaming && root.st.daemon === next.daemon
+                            && root.st.configured === next.configured && root.st.started_ms === next.started_ms
+                            && (h ? h.length : 0) === (nh ? nh.length : 0) && (!h || !h.length || h[0].at_ms === nh[0].at_ms))
                         return;
                     root.st = next;
                 } catch (e) {}
@@ -99,7 +104,7 @@ PluginComponent {
         color: root.pillColor
 
         SequentialAnimation on opacity {
-            running: root.recording || root.busy
+            running: root.busy
             loops: Animation.Infinite
             onRunningChanged: if (!running) pillIcon.opacity = 1
             NumberAnimation { to: 0.45; duration: 550; easing.type: Easing.InOutQuad }

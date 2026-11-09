@@ -37,7 +37,6 @@ pub struct Snapshot {
     /// The current recording streams live.
     live: bool,
     started_ms: u64,
-    level: f32,
     text: String,
     error: String,
     can_retry: bool,
@@ -88,6 +87,8 @@ struct Ctl {
 
 struct Daemon {
     snap: watch::Sender<Snapshot>,
+    /// Mic loudness 0..1, sent separately so the UI doesn't re-read the whole state ~20x/s.
+    level: watch::Sender<f32>,
     ctl: Mutex<Ctl>,
     config: Mutex<Config>,
     http: reqwest::Client,
@@ -136,7 +137,6 @@ impl Daemon {
         if self.is_current(id) {
             self.update(|s| {
                 s.state = "idle".into();
-                s.level = 0.0;
                 s.text.clear();
                 s.error.clear();
             });
@@ -152,7 +152,6 @@ impl Daemon {
         self.ctl.lock().unwrap().failed = saved;
         self.update(|s| {
             s.state = "error".into();
-            s.level = 0.0;
             s.error = message;
             s.can_retry = can_retry;
         });
@@ -222,7 +221,6 @@ impl Daemon {
             s.mode = mode.name().into();
             s.live = live;
             s.started_ms = now_ms();
-            s.level = 0.0;
             s.text.clear();
             s.error.clear();
             s.can_retry = false;
@@ -285,11 +283,11 @@ impl Daemon {
                                 let _ = tx.send(std::mem::take(&mut pending));
                             }
                         }
-                        if last_level.elapsed() >= Duration::from_millis(45) {
+                        if last_level.elapsed() >= Duration::from_millis(50) {
                             let level = audio::level(&window);
                             window.clear();
                             last_level = Instant::now();
-                            self.update(|s| s.level = level);
+                            self.level.send_replace(level);
                         }
                     }
                     _ => {
@@ -301,6 +299,7 @@ impl Daemon {
         };
 
         let rest = recorder.finish().await;
+        self.level.send_replace(0.0);
         pcm.extend_from_slice(&rest);
         if let Some(tx) = audio_tx.take() {
             pending.extend_from_slice(&rest);
@@ -333,7 +332,6 @@ impl Daemon {
         self.update(|s| {
             s.state = "transcribing".into();
             s.mode = final_mode.name().into();
-            s.level = 0.0;
         });
 
         // Keep the audio on disk until it is transcribed, so nothing is lost.
@@ -444,11 +442,24 @@ async fn handle(d: Arc<Daemon>, stream: UnixStream) -> Result<()> {
     let line = line.trim();
     match line {
         "watch" => {
+            // Full state as JSON on change; mic level as a tiny "L 0.420" line.
             let mut rx = d.snap.subscribe();
+            let mut lv = d.level.subscribe();
+            let json = serde_json::to_string(&*rx.borrow_and_update())?;
+            write.write_all(format!("{json}\n").as_bytes()).await?;
             loop {
-                let json = serde_json::to_string(&*rx.borrow_and_update())?;
-                write.write_all(format!("{json}\n").as_bytes()).await?;
-                rx.changed().await?;
+                tokio::select! {
+                    r = rx.changed() => {
+                        r?;
+                        let json = serde_json::to_string(&*rx.borrow_and_update())?;
+                        write.write_all(format!("{json}\n").as_bytes()).await?;
+                    }
+                    r = lv.changed() => {
+                        r?;
+                        let v = *lv.borrow_and_update();
+                        write.write_all(format!("L {v:.3}\n").as_bytes()).await?;
+                    }
+                }
             }
         }
         "status" => {
@@ -465,9 +476,14 @@ async fn handle(d: Arc<Daemon>, stream: UnixStream) -> Result<()> {
 
 pub async fn serve() -> Result<()> {
     let path = crate::socket_path();
+    // Never steal the socket from a daemon that is still alive.
+    if UnixStream::connect(&path).await.is_ok() {
+        anyhow::bail!("another dictate daemon is already running on {}", path.display());
+    }
     let _ = std::fs::remove_file(&path);
     let listener = UnixListener::bind(&path).with_context(|| format!("could not listen on {}", path.display()))?;
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    let our_inode = std::fs::metadata(&path).map(|m| std::os::unix::fs::MetadataExt::ino(&m)).ok();
 
     let config = Config::load();
     let snapshot = Snapshot {
@@ -480,6 +496,7 @@ pub async fn serve() -> Result<()> {
     };
     let d = Arc::new(Daemon {
         snap: watch::channel(snapshot).0,
+        level: watch::channel(0.0).0,
         ctl: Mutex::new(Ctl::default()),
         config: Mutex::new(config),
         http: reqwest::Client::builder().user_agent(concat!("dictate/", env!("CARGO_PKG_VERSION"))).build()?,
@@ -499,6 +516,9 @@ pub async fn serve() -> Result<()> {
             _ = int.recv() => break,
         }
     }
-    let _ = std::fs::remove_file(&path);
+    // Only remove the socket if it is still ours (a newer daemon may have replaced it).
+    if std::fs::metadata(&path).map(|m| std::os::unix::fs::MetadataExt::ino(&m)).ok() == our_inode {
+        let _ = std::fs::remove_file(&path);
+    }
     Ok(())
 }

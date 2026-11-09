@@ -4,7 +4,7 @@ Talk, and the text is pasted where you are typing. Uses ElevenLabs Scribe direct
 
 - **Mouse:** click the mic in the bar to start, click again (or **Done** on the card) to stop. Right click the mic for settings and recent transcripts.
 - **Keys (niri):** `Mod+B` raw transcript, `Mod+G` cleaned up with Luna.
-- **Card:** looks like a notification. Shows a timer, a live waveform, the words (in live mode), and Cancel / Clean up / Done buttons.
+- **Card:** shows only while you talk (and if something fails). A timer, a mic that glows softly with your voice, the words in live mode, and Cancel / Clean up / Done. When it is done it just disappears: no "pasted" popup, no text.
 - **Two engines:** normal (default) uploads the audio when you stop. **Live transcription** (toggle in the right-click menu) streams audio over a WebSocket so you see words while you talk. If live fails, it falls back to a normal upload.
 - **Nothing gets lost:** audio is saved to `~/.local/state/dictate/recordings/` until it is transcribed. If ElevenLabs fails, the card shows **Retry**.
 

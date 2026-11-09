@@ -182,9 +182,12 @@ fn main() -> Result<()> {
         _ => {}
     }
 
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
+    // The daemon gets worker threads; clients (watch/toggle) stay single-threaded and tiny.
+    let runtime = if cmd == "serve" {
+        tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()?
+    } else {
+        tokio::runtime::Builder::new_current_thread().enable_all().build()?
+    };
 
     match cmd {
         "serve" => {

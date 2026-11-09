@@ -15,11 +15,13 @@ PluginComponent {
     property string bin: Quickshell.env("HOME") + "/.local/bin/dictate"
     property var st: ({ daemon: false })
     property real nowMs: Date.now()
-    property var levels: []
-    readonly property int barCount: 44
+    // Mic loudness 0..1 while recording; the badge breathes with it.
+    property real voice: 0
 
     readonly property string phase: st.daemon === true ? (st.state || "idle") : "idle"
-    readonly property bool shown: phase !== "idle"
+    // When it's done, the card just goes away. It stays only for problems
+    // (failed, or paste failed so the text is on the clipboard instead).
+    readonly property bool shown: phase === "recording" || busy || phase === "error" || (phase === "done" && !!st.error)
     readonly property bool recording: phase === "recording"
     readonly property bool busy: phase === "transcribing" || phase === "cleaning"
     readonly property bool luna: st.mode === "luna"
@@ -39,19 +41,22 @@ PluginComponent {
         running: true
         stdout: SplitParser {
             onRead: data => {
+                // "L 0.420" = mic level (~20x/s while recording): cheap path, no JSON.
+                if (data.charCodeAt(0) === 76) {
+                    const v = root.recording ? (Number(data.slice(2)) || 0) : 0;
+                    // Ignore tiny changes so silence doesn't cause redraws.
+                    if (Math.abs(v - root.voice) > 0.04 || (v === 0 && root.voice !== 0))
+                        root.voice = v;
+                    return;
+                }
                 let next;
                 try {
                     next = JSON.parse(data);
                 } catch (e) {
                     return;
                 }
-                if (next.state === "recording") {
-                    if (root.st.state !== "recording")
-                        root.levels = [];
-                    const l = root.levels.slice(-(root.barCount - 1));
-                    l.push(Number(next.level) || 0);
-                    root.levels = l;
-                }
+                if (next.state !== "recording")
+                    root.voice = 0;
                 root.st = next;
             }
         }
@@ -68,7 +73,7 @@ PluginComponent {
     }
 
     Timer {
-        interval: 250
+        interval: 500
         repeat: true
         running: root.recording
         triggeredOnStart: true
@@ -93,7 +98,7 @@ PluginComponent {
         case "cleaning":
             return "Cleaning up";
         case "done":
-            return st.error ? "Copied" : "Pasted";
+            return "Couldn't paste: it's on your clipboard";
         case "error":
             return "Didn't work";
         }
@@ -108,17 +113,17 @@ PluginComponent {
             parts.push(st.live ? "Live" : "ElevenLabs");
         if (luna)
             parts.push("Luna cleanup");
-        if (phase === "done" && st.error)
-            parts.push(st.error);
         return parts.join("  ·  ");
     }
 
     readonly property string bodyText: {
         if (phase === "error")
             return st.error || "";
-        // While talking, keep the newest words in view.
-        const t = phase === "recording" ? (st.live ? (st.text || "") : "") : (st.text || "");
-        return phase === "recording" && t.length > 260 ? "…" + t.slice(-260) : t;
+        // Only live mode shows words, and only while you talk; never the final pasted text.
+        if (phase !== "recording" || !st.live)
+            return "";
+        const t = st.text || "";
+        return t.length > 260 ? "…" + t.slice(-260) : t;
     }
 
     readonly property color accent: phase === "error" ? Theme.error : recording ? Theme.error : Theme.primary
@@ -270,6 +275,24 @@ PluginComponent {
                     width: parent.width
                     height: 44
 
+                    // Soft halo behind the badge: grows a little with your voice, smoothly.
+                    Rectangle {
+                        anchors.centerIn: badge
+                        width: 44
+                        height: 44
+                        radius: 22
+                        color: Theme.withAlpha(Theme.error, 0.22)
+                        visible: root.recording
+                        scale: 1 + root.voice * 0.32
+                        opacity: 0.25 + root.voice * 0.75
+                        Behavior on scale {
+                            NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
+                        }
+                        Behavior on opacity {
+                            NumberAnimation { duration: 160; easing.type: Easing.OutQuad }
+                        }
+                    }
+
                     Rectangle {
                         id: badge
                         width: 44
@@ -277,22 +300,6 @@ PluginComponent {
                         radius: 22
                         color: Theme.withAlpha(root.accent, 0.16)
                         anchors.verticalCenter: parent.verticalCenter
-
-                        Rectangle {
-                            anchors.centerIn: parent
-                            width: 44
-                            height: 44
-                            radius: 22
-                            color: "transparent"
-                            border.color: Theme.withAlpha(Theme.error, 0.5)
-                            border.width: 2
-                            visible: root.recording
-                            scale: 1 + (root.levels.length ? root.levels[root.levels.length - 1] : 0) * 0.35
-                            opacity: 1.15 - scale * 0.6
-                            Behavior on scale {
-                                NumberAnimation { duration: 90 }
-                            }
-                        }
 
                         DIcon {
                             anchors.centerIn: parent
@@ -362,36 +369,6 @@ PluginComponent {
                             hoverEnabled: true
                             cursorShape: Qt.PointingHandCursor
                             onClicked: root.run(["cancel"])
-                        }
-                    }
-                }
-
-                // waveform
-                Item {
-                    width: parent.width
-                    height: 36
-                    visible: root.recording
-
-                    Row {
-                        anchors.centerIn: parent
-                        spacing: 3
-
-                        Repeater {
-                            model: root.barCount
-
-                            Rectangle {
-                                required property int index
-                                readonly property int from: root.barCount - root.levels.length
-                                readonly property real v: index >= from ? root.levels[index - from] : 0
-                                width: (content.width - (root.barCount - 1) * 3) / root.barCount
-                                height: Math.max(4, v * 36)
-                                radius: width / 2
-                                anchors.verticalCenter: parent.verticalCenter
-                                color: Theme.withAlpha(Theme.error, 0.35 + v * 0.65)
-                                Behavior on height {
-                                    NumberAnimation { duration: 80 }
-                                }
-                            }
                         }
                     }
                 }
