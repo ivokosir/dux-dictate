@@ -440,9 +440,9 @@ PluginComponent {
 
     // ---- popout --------------------------------------------------------------------------
 
-    // Wide enough that every problem title fits next to ⚡ and the 120 px slot
-    // (title gets ~188 px; the longest, "Didn't go through", is ~170 px at font scale 1.3).
-    popoutWidth: 460
+    // Wide enough that every problem title fits next to ⚡ and the 120 px slot:
+    // the title gets ~158 px; the longest ("Didn't go through") is ~130 px at 16 px.
+    popoutWidth: 430
 
     popoutContent: Component {
         PopoutComponent {
