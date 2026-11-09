@@ -45,7 +45,7 @@ pub async fn copy(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Copies the text and presses Ctrl+V, like Voxtype's paste mode.
+/// Copies the text and presses Ctrl+V.
 /// Newlines stay text instead of acting as Enter presses.
 pub async fn paste(text: &str) -> Result<()> {
     if std::env::var_os("DICTATE_NO_PASTE").is_some() {
@@ -53,14 +53,9 @@ pub async fn paste(text: &str) -> Result<()> {
     }
     copy(text).await?;
     tokio::time::sleep(Duration::from_millis(150)).await;
-    let status = Command::new("wtype")
-        .args(["-M", "ctrl", "-k", "v", "-m", "ctrl"])
-        .status()
-        .await
-        .context("could not run wtype")?;
-    if !status.success() {
-        bail!("wtype failed; the text is on your clipboard");
-    }
+    tokio::task::spawn_blocking(crate::keyboard::paste_keys)
+        .await?
+        .context("could not press Ctrl+V; the text is on your clipboard")?;
     Ok(())
 }
 
@@ -78,17 +73,7 @@ pub async fn type_text(text: &str) -> Result<()> {
     if std::env::var_os("DICTATE_NO_PASTE").is_some() {
         return Ok(());
     }
-    let status = Command::new("wtype")
-        .arg("--")
-        .arg(&text)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .await
-        .context("could not run wtype")?;
-    if !status.success() {
-        bail!("wtype failed");
-    }
+    tokio::task::spawn_blocking(move || crate::keyboard::type_text(&text)).await??;
     Ok(())
 }
 

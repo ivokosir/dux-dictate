@@ -535,6 +535,8 @@ PluginComponent {
                         anchors.rightMargin: Theme.spacingS
                         anchors.verticalCenter: parent.verticalCenter
                         buttonSize: 36
+                        // Always a circle (DMS makes 36 px buttons rounded squares).
+                        radius: 18
                         iconSize: 18
                         iconName: "bolt"
                         iconFilled: true
@@ -586,6 +588,7 @@ PluginComponent {
 
                             DActionButton {
                                 buttonSize: 36
+                                radius: 18
                                 iconSize: 18
                                 iconName: "auto_awesome"
                                 iconFilled: true

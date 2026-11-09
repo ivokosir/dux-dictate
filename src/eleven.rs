@@ -67,11 +67,8 @@ pub async fn stream(
     mut audio: mpsc::UnboundedReceiver<Vec<u8>>,
     on_segment: impl Fn(String),
 ) -> Result<String> {
-    // A piece is finished after 0.3 s of silence, so live text lands right after
-    // each sentence (the default waits much longer, so nothing appeared until the end).
-    let mut url = format!(
-        "{WS}?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad&vad_silence_threshold_secs=0.3"
-    );
+    // ElevenLabs' own pause detection decides when a piece is finished.
+    let mut url = format!("{WS}?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad");
     if !language.is_empty() && language != "auto" {
         url.push_str(&format!("&language_code={language}"));
     }

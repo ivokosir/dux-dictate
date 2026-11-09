@@ -2,6 +2,7 @@ mod audio;
 mod daemon;
 mod eleven;
 mod files;
+mod keyboard;
 mod output;
 
 use std::{
@@ -269,6 +270,8 @@ fn main() -> Result<()> {
     match cmd {
         "serve" => runtime.block_on(daemon::serve()),
         "list" | "transcribe" | "clean" | "copy" | "reveal" | "trash" | "folder" => runtime.block_on(takes(&args)),
+        // Types text into the focused field the way live mode does (for testing).
+        "type" => keyboard::type_text(&args[1..].join(" ")),
         "toggle" | "start" | "stop" | "cancel" | "retry" | "streaming" | "popout" | "refresh" | "status" | "watch" => {
             runtime.block_on(client(args.join(" ")))
         }
