@@ -1,0 +1,22 @@
+[package]
+name = "dictate"
+version = "0.1.0"
+edition = "2024"
+description = "Talk, and the text is pasted where you type. ElevenLabs Scribe with a DankMaterialShell card."
+license = "MIT"
+
+[dependencies]
+anyhow = "1.0"
+base64 = "0.22"
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+libc = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.47", features = ["fs", "io-util", "macros", "net", "process", "rt-multi-thread", "signal", "sync", "time"] }
+tokio-tungstenite = { version = "0.30", features = ["rustls-tls-webpki-roots"] }
+
+[profile.release]
+lto = "thin"
+strip = true

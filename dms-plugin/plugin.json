@@ -1,0 +1,21 @@
+{
+  "id": "dictate",
+  "name": "Dictate",
+  "description": "Talk and the text is pasted where you type (ElevenLabs Scribe). Click the mic to start or stop; a card shows while you talk.",
+  "version": "0.1.0",
+  "author": "dms-dictate contributors",
+  "type": "composite",
+  "capabilities": [
+    "daemon",
+    "dankbar-widget"
+  ],
+  "components": {
+    "daemon": "./DictateCard.qml",
+    "widget": "./DictateWidget.qml"
+  },
+  "icon": "mic",
+  "requires_dms": ">=1.7.0",
+  "permissions": [
+    "process"
+  ]
+}
