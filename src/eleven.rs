@@ -1,16 +1,11 @@
-//! ElevenLabs Scribe: one upload (batch) or a live WebSocket (streaming).
+//! ElevenLabs Scribe: the whole recording goes up in one upload.
 
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow, bail};
-use base64::Engine;
-use futures_util::{SinkExt, StreamExt};
+use anyhow::{Context, Result, bail};
 use serde::Deserialize;
-use tokio::{sync::mpsc, time::Instant};
-use tokio_tungstenite::tungstenite::{Message, client::IntoClientRequest, http::HeaderValue};
 
 const API: &str = "https://api.elevenlabs.io";
-const WS: &str = "wss://api.elevenlabs.io/v1/speech-to-text/realtime";
 
 /// Uploads a whole recording (here: the take's Ogg Opus file).
 pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, audio: Vec<u8>) -> Result<String> {
@@ -55,121 +50,4 @@ fn short_error(body: &str) -> String {
         .map(|v| v.as_str().map(str::to_owned).unwrap_or_else(|| v.to_string()))
         .unwrap_or_else(|| body.to_owned());
     msg.chars().take(200).collect()
-}
-
-/// Streams audio from `audio` until the channel closes, then commits and
-/// returns the full transcript. `on_segment` gets each finished piece of text
-/// as soon as ElevenLabs commits it (after a short pause in speech), and the
-/// last unfinished piece at the end, so the caller can type it right away.
-pub async fn stream(
-    key: &str,
-    language: &str,
-    mut audio: mpsc::UnboundedReceiver<Vec<u8>>,
-    on_segment: impl Fn(String),
-) -> Result<String> {
-    // ElevenLabs' own pause detection decides when a piece is finished.
-    let mut url = format!("{WS}?model_id=scribe_v2_realtime&audio_format=pcm_16000&commit_strategy=vad");
-    if !language.is_empty() && language != "auto" {
-        url.push_str(&format!("&language_code={language}"));
-    }
-    let mut request = url.into_client_request()?;
-    request.headers_mut().insert("xi-api-key", HeaderValue::from_str(key)?);
-
-    let (ws, _) = tokio::time::timeout(Duration::from_secs(8), tokio_tungstenite::connect_async(request))
-        .await
-        .map_err(|_| anyhow!("live connection timed out"))?
-        .context("could not open live connection")?;
-    let (mut tx, mut rx) = ws.split();
-
-    let b64 = base64::engine::general_purpose::STANDARD;
-    let chunk = |pcm: &[u8], commit: bool| {
-        Message::text(
-            serde_json::json!({
-                "message_type": "input_audio_chunk",
-                "audio_base_64": b64.encode(pcm),
-                "commit": commit,
-                "sample_rate": 16000,
-            })
-            .to_string(),
-        )
-    };
-
-    let mut committed: Vec<String> = Vec::new();
-    let mut partial = String::new();
-    let mut closing = false;
-    let mut commit_after_close = false;
-    let mut hard_deadline = Instant::now() + Duration::from_secs(3600);
-    let mut quiet_deadline = hard_deadline;
-
-    let joined = |committed: &[String], partial: &str| {
-        let mut parts: Vec<&str> = committed.iter().map(String::as_str).collect();
-        if !partial.trim().is_empty() {
-            parts.push(partial.trim());
-        }
-        parts.join(" ")
-    };
-
-    loop {
-        tokio::select! {
-            pcm = audio.recv(), if !closing => match pcm {
-                Some(pcm) => tx.send(chunk(&pcm, false)).await.context("live connection dropped")?,
-                None => {
-                    // 100 ms of silence carries the final commit.
-                    tx.send(chunk(&[0u8; 3200], true)).await.context("live connection dropped")?;
-                    closing = true;
-                    let now = Instant::now();
-                    hard_deadline = now + Duration::from_secs(6);
-                    quiet_deadline = now + Duration::from_millis(1500);
-                }
-            },
-            msg = rx.next() => {
-                let Some(msg) = msg else {
-                    if closing { break } else { bail!("live connection closed") }
-                };
-                let msg = msg.context("live connection error")?;
-                let Message::Text(text) = msg else { continue };
-                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                let kind = v["message_type"].as_str().unwrap_or("");
-                match kind {
-                    "partial_transcript" => {
-                        partial = v["text"].as_str().unwrap_or("").to_owned();
-                    }
-                    "committed_transcript" => {
-                        let t = v["text"].as_str().unwrap_or("").trim().to_owned();
-                        if !t.is_empty() {
-                            on_segment(t.clone());
-                            committed.push(t);
-                        }
-                        partial.clear();
-                        if closing {
-                            commit_after_close = true;
-                        }
-                    }
-                    "session_started" | "warning" => {}
-                    _ if v.get("error").is_some() => {
-                        if closing {
-                            break; // e.g. nothing left to commit: keep what we have
-                        }
-                        bail!("live: {}", v["error"].as_str().unwrap_or(kind));
-                    }
-                    _ => {}
-                }
-                if closing {
-                    if commit_after_close && partial.trim().is_empty() {
-                        // Give a moment for one more segment, then finish.
-                        quiet_deadline = Instant::now() + Duration::from_millis(250);
-                    } else {
-                        quiet_deadline = Instant::now() + Duration::from_millis(1500);
-                    }
-                }
-            },
-            _ = tokio::time::sleep_until(quiet_deadline.min(hard_deadline)), if closing => break,
-        }
-    }
-
-    let _ = tx.send(Message::Close(None)).await;
-    if !partial.trim().is_empty() {
-        on_segment(partial.trim().to_owned());
-    }
-    Ok(joined(&committed, &partial))
 }

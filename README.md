@@ -12,9 +12,9 @@ Both work the same way: click the bar button for the popout, **right click start
 - **Key (niri):** `Mod+B` starts, and pressing it again stops and pastes.
 - **Bar button:** teal with a timer while you talk; the icon breathes while it works (✨ while cleaning up). Click it for ✕ ✨ ✓.
 - **Card:** a small pill in the top-right corner, only for what the bar can't show. Problems show there as a short red line (with ⟳ retry and ✕). And while a fullscreen window covers the bar, it shows the take: glowing mic + timer; put the mouse on it and it turns into ✕ (throw away), ✨ (clean up with Luna, then paste) and ✓ (paste).
-- **Popout:** one row that never moves: mic, Dictate (+ timer while talking), ⚡ Live, and Start / ✕ ✨ ✓ / Cancel / Retry. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open on Dictate.
+- **Popout:** one row: mic, Dictate (+ timer while talking), and Start / ✕ ✨ ✓ / Cancel / Retry. A problem shows as a small red line under the title, with what to do about it. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open on Dictate.
 - **Recent is just files:** every take is `~/Music/Dictations/<time>.ogg` (+ `.txt`, + `.clean.txt`). Not transcribed → ⟳ Transcribe. Transcribed → ✨ clean up (or copy the cleaned text), 📋 copy raw text. The last 20 are kept; older ones go to the trash.
-- **Two engines:** normal (default) uploads the audio when you stop and pastes it. **Live** (⚡) streams while you talk and *types* each sentence straight into the field when you pause (ElevenLabs decides when a sentence is done; no Ctrl+V). It types with a built-in virtual keyboard that sends real key codes, so apps like Claude don't drop spaces (wtype sends fake ones). While the popout is open it holds the text back, and ✨ with live puts the cleaned version on your clipboard (the raw one is already typed). If live fails before anything was typed, it falls back to a normal upload.
+- **One upload when you stop:** the whole recording goes to ElevenLabs Scribe (`scribe_v2`), which hears everything at once, and the text is pasted with Ctrl+V from a built-in virtual keyboard that sends real key codes. About 1 s of waiting for a short take, 3–4 s for a few minutes. (There used to be a live mode that typed while you talked; its realtime model was less correct, so it is gone.)
 - **No time limit:** the audio is written to disk while you talk, so long takes are fine and nothing is lost if something fails.
 
 ## Meeting
@@ -50,7 +50,6 @@ dictate toggle [direct|luna]   start, or stop and paste
 dictate stop [direct|luna] [copy]
 dictate cancel                 throw the recording away / dismiss a problem
 dictate retry                  transcribe the last failed take again
-dictate streaming on|off|toggle
 dictate status | watch         state as JSON (the DMS plugin uses watch)
 
 dictate list [n]               takes in ~/Music/Dictations as JSON
@@ -83,7 +82,6 @@ dms ipc call meetrec rename        jump to naming the meeting
 
 ```json
 {
-  "streaming": false,
   "language": "en",
   "luna_command": "/home/you/.local/bin/voxtype-luna-cleanup",
   "luna_timeout_secs": 95,
@@ -95,7 +93,7 @@ dms ipc call meetrec rename        jump to naming the meeting
 
 ```text
 Dictate   pw-record -> dictate daemon -> ffmpeg -> ~/Music/Dictations/<time>.ogg (while you talk)
-                    -> ElevenLabs (upload the .ogg, or scribe_v2_realtime WebSocket) -> <time>.txt
+                    -> ElevenLabs (upload the .ogg, scribe_v2) -> <time>.txt
                     -> optional Luna cleanup -> <time>.clean.txt -> wl-copy + Ctrl+V (built-in virtual keyboard)
 Meeting   meetrec start -> ffmpeg (speaker monitor + mic, mixed) as meetrec.service -> ~/Music/Meetings/<time>_<name>.ogg
 

@@ -13,7 +13,9 @@ import qs.Modules.Plugins
 // Click the bar button for the popout, right click starts/stops the current mode.
 // The popout header is the same row in both modes:
 //   [icon] Title ⇅ 0:12 ................. [the mode's buttons]
-// and under it the mode's files (Recent takes / Recordings).
+//          a small second line when there is something to say
+//          (Dictate: a problem, Meeting: the name of the recording)
+// and under it the mode's files (Recent).
 PluginComponent {
     id: root
 
@@ -209,17 +211,15 @@ PluginComponent {
         readonly property bool active: recording || busy || barError
         readonly property string elapsed: recording ? root.clock(root.nowMs - (Number(st.started_ms) || root.nowMs)) : ""
 
-        // [icon, title, hint]
+        // [icon, what went wrong, what to do]
         readonly property var problemInfo: ({
             cleanfail: ["auto_awesome", "Clean-up failed", "Raw text used instead"],
             paste: ["content_paste", "Couldn't paste", "It's on your clipboard"],
             nospeech: ["voice_over_off", "No speech heard", ""],
             mic: ["mic_off", "Mic not working", "Check the input device"],
             eleven: ["cloud_off", "Didn't go through", "Audio is saved. Retry sends it again"],
-            livefail: ["cloud_off", "Live stopped", "The full text is on your clipboard"],
-            cleancopied: ["auto_awesome", "Cleaned & copied", "The raw text was typed live; the cleaned one is on your clipboard"],
-            nokey: ["key_off", "No API key", "Add your ElevenLabs key: dictate set-key"],
-            other: ["error", "Something failed", ""]
+            nokey: ["key_off", "No ElevenLabs key", "Run: dictate set-key"],
+            other: ["error", "Something went wrong", ""]
         })
 
         property var takes: []
@@ -1147,9 +1147,6 @@ PluginComponent {
 
     // ---- popout --------------------------------------------------------------------------
 
-    // Wide enough that every Dictate problem title fits next to ⚡ and the 120 px slot.
-    popoutWidth: 430
-
     popoutContent: Component {
         PopoutComponent {
             id: popout
@@ -1170,11 +1167,9 @@ PluginComponent {
                 // Header: the same row in every mode and state.
                 Item {
                     id: head
-                    readonly property var prob: !root.meeting && dict.problem ? (dict.problemInfo[dict.st.problem] || dict.problemInfo.other) : null
-                    readonly property bool notice: prob !== null && dict.st.problem === "cleancopied"
-                    readonly property bool bad: prob !== null && !notice
                     readonly property bool down: !root.meeting && dict.phase === "down"
-                    readonly property bool locked: dict.recording || dict.busy || !dict.up
+                    readonly property var prob: !root.meeting && dict.problem ? (dict.problemInfo[dict.st.problem] || dict.problemInfo.other)
+                        : down ? ["mic_off", "Service not running", "systemctl --user start dictate"] : null
                     readonly property bool renaming: root.meeting && meet.recording && meet.editingPath !== "" && meet.editingPath === meet.st.file
 
                     x: Theme.spacingS
@@ -1188,8 +1183,8 @@ PluginComponent {
                         radius: 20
                         anchors.verticalCenter: parent.verticalCenter
                         color: root.meeting ? (meet.recording ? root.recColor : Theme.surfaceContainerHigh)
-                            : head.bad ? Theme.withAlpha(Theme.error, 0.14)
-                            : (head.notice || dict.recording || dict.busy) ? Theme.withAlpha(Theme.primary, 0.16)
+                            : head.prob ? Theme.withAlpha(Theme.error, 0.14)
+                            : (dict.recording || dict.busy) ? Theme.withAlpha(Theme.primary, 0.16)
                             : Theme.surfaceContainerHigh
 
                         DSpinner {
@@ -1204,19 +1199,17 @@ PluginComponent {
                             anchors.centerIn: parent
                             name: root.meeting ? "radio_button_checked"
                                 : head.prob ? head.prob[0]
-                                : head.down ? "mic_off"
                                 : dict.phase === "cleaning" ? "auto_awesome" : "mic"
                             filled: root.meeting ? meet.recording : true
                             size: 22
                             color: root.meeting ? (meet.recording ? "white" : Theme.surfaceVariantText)
-                                : head.bad ? Theme.error
-                                : (dict.recording || dict.busy || head.notice) ? Theme.primary
+                                : head.prob ? Theme.error
+                                : (dict.recording || dict.busy) ? Theme.primary
                                 : Theme.surfaceVariantText
                         }
                     }
 
                     Column {
-                        id: headCol
                         // The title button has 8 px of its own padding.
                         anchors.left: headIcon.right
                         anchors.leftMargin: Theme.spacingM - 8
@@ -1236,15 +1229,13 @@ PluginComponent {
                             }
                         }
 
-                        Item {
-                            id: line1
+                        Row {
                             visible: !head.renaming
-                            width: parent.width
                             height: 28
+                            spacing: 0
 
                             // The title is the mode switch: Dictate <-> Meeting.
                             Rectangle {
-                                id: titleBtn
                                 width: titleRow.width + 16
                                 height: parent.height
                                 radius: height / 2
@@ -1257,14 +1248,10 @@ PluginComponent {
                                     spacing: 4
 
                                     StyledText {
-                                        // Never wider than the space left, so a long title ends in "…".
-                                        readonly property real room: line1.width - 16 - 20 - (otherDot.visible ? 12 : 0) - (timerText.visible ? timerText.implicitWidth : 0)
-                                        width: Math.min(implicitWidth, Math.max(0, room))
-                                        text: root.meeting ? "Meeting" : head.prob ? head.prob[1] : head.down ? "Service is off" : "Dictate"
+                                        text: root.meeting ? "Meeting" : "Dictate"
                                         font.pixelSize: Theme.fontSizeLarge
                                         font.weight: Font.Medium
-                                        color: head.bad || head.down ? Theme.error : Theme.surfaceText
-                                        elide: Text.ElideRight
+                                        color: Theme.surfaceText
                                         anchors.verticalCenter: parent.verticalCenter
                                     }
                                     DIcon {
@@ -1275,7 +1262,6 @@ PluginComponent {
                                     }
                                     // A dot when the other mode is at work right now.
                                     Rectangle {
-                                        id: otherDot
                                         visible: root.meeting ? (dict.recording || dict.busy) : meet.recording
                                         width: 8
                                         height: 8
@@ -1285,27 +1271,37 @@ PluginComponent {
                                     }
                                 }
 
-                                // Problems explain themselves on hover.
                                 StateLayer {
-                                    tooltipText: head.prob && head.prob[2] ? head.prob[2]
-                                        : head.down ? "systemctl --user start dictate"
-                                        : root.meeting ? "Switch to Dictate" : "Switch to Meeting"
+                                    tooltipText: root.meeting ? "Switch to Dictate" : "Switch to Meeting"
                                     tooltipSide: "bottom"
                                     onClicked: root.setMode(root.meeting ? "dictate" : "meeting")
                                 }
                             }
 
                             StyledText {
-                                id: timerText
                                 visible: root.meeting ? meet.recording : dict.recording
-                                anchors.left: titleBtn.right
-                                anchors.verticalCenter: titleBtn.verticalCenter
+                                anchors.verticalCenter: parent.verticalCenter
                                 anchors.verticalCenterOffset: 1
                                 text: root.meeting ? meet.elapsed : dict.elapsed
                                 font.pixelSize: Theme.fontSizeMedium
                                 font.features: { "tnum": 1 }
                                 color: root.meeting ? root.recColor : Theme.primary
                             }
+                        }
+
+                        // Dictate: what went wrong, and what to do about it.
+                        StyledText {
+                            visible: head.prob !== null
+                            x: 8
+                            width: parent.width - 8
+                            height: 16
+                            verticalAlignment: Text.AlignVCenter
+                            text: head.prob ? head.prob[1] + (head.prob[2] ? " <font color=\"" + Theme.surfaceVariantText + "\">· " + head.prob[2] + "</font>" : "") : ""
+                            textFormat: Text.StyledText
+                            font.pixelSize: Theme.fontSizeSmall
+                            color: Theme.error
+                            elide: Text.ElideRight
+                            wrapMode: Text.NoWrap
                         }
 
                         // Meeting being recorded: its name (click to rename) and size.
@@ -1357,19 +1353,16 @@ PluginComponent {
                         }
                     }
 
-                    // Right side: the mode's buttons.
-                    Item {
+                    // Right side: the buttons that make sense right now.
+                    Row {
                         id: headRight
-                        width: root.meeting ? recBtn.width : 36 + Theme.spacingS + 120
-                        height: 36
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
+                        spacing: 6
 
                         // Meeting: Record / Stop.
                         PillBtn {
-                            id: recBtn
                             visible: root.meeting
-                            anchors.right: parent.right
                             tint: meet.recording ? root.recColor : Theme.primary
                             onTint: meet.recording ? "white" : Theme.onPrimary
                             icon: meet.recording ? "stop" : "fiber_manual_record"
@@ -1378,117 +1371,82 @@ PluginComponent {
                             onClicked: meet.toggle()
                         }
 
-                        // Dictate, live: an icon that stays put; locked while a take is going.
+                        // Dictate: Start, or Retry after a failed upload.
+                        PillBtn {
+                            visible: !root.meeting && !dict.recording && !dict.busy
+                            icon: dict.st.can_retry === true && dict.problem ? "refresh" : "mic"
+                            label: dict.st.can_retry === true && dict.problem ? "Retry" : "Start"
+                            off: !dict.up
+                            onClicked: dict.run([dict.st.can_retry === true && dict.problem ? "retry" : "start"])
+                        }
+
+                        // Dictate, working: Cancel.
+                        PillBtn {
+                            visible: !root.meeting && dict.busy
+                            ghost: true
+                            icon: "close"
+                            label: "Cancel"
+                            onClicked: dict.run(["cancel"])
+                        }
+
+                        // Dictate, talking: ✕ ✨ ✓.
                         DActionButton {
-                            visible: !root.meeting
-                            anchors.left: parent.left
+                            visible: !root.meeting && dict.recording
                             buttonSize: 36
                             // Always a circle (DMS makes 36 px buttons rounded squares).
                             radius: 18
                             iconSize: 18
-                            iconName: "bolt"
-                            iconFilled: true
-                            // Stays enabled so the tooltip can explain why it is locked.
-                            iconColor: dict.st.streaming ? Theme.primary : Theme.surfaceVariantText
-                            backgroundColor: dict.st.streaming ? Theme.withAlpha(Theme.primary, 0.16) : "transparent"
-                            opacity: head.locked ? 0.38 : 1
-                            tooltipText: !dict.up ? "Service not running" : head.locked ? "Can't change while talking" : "Live transcription: " + (dict.st.streaming ? "on" : "off")
+                            iconName: "close"
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Cancel"
                             tooltipSide: "bottom"
-                            onClicked: if (!head.locked) dict.run(["streaming", dict.st.streaming ? "off" : "on"])
+                            onClicked: dict.run(["cancel"])
                         }
-
-                        // Dictate, fixed-width slot: Start / ✕ ✨ ✓ / Cancel / Retry.
-                        // Same width in every state (3 × 36 + 2 × 6), so ⚡ never moves.
-                        Item {
-                            visible: !root.meeting
-                            width: 120
+                        DActionButton {
+                            visible: !root.meeting && dict.recording
+                            buttonSize: 36
+                            radius: 18
+                            iconSize: 18
+                            iconName: "auto_awesome"
+                            iconFilled: true
+                            iconColor: Theme.surfaceVariantText
+                            tooltipText: "Clean up, then copy"
+                            tooltipSide: "bottom"
+                            onClicked: {
+                                dict.finishingHere = true;
+                                dict.run(["stop", "luna", "copy"]);
+                            }
+                        }
+                        // ✓: a plain filled circle (DActionButton morphs its shape on hover).
+                        Rectangle {
+                            visible: !root.meeting && dict.recording
+                            width: 36
                             height: 36
-                            anchors.right: parent.right
-
-                            PillBtn {
-                                anchors.fill: parent
-                                visible: !dict.recording && !dict.busy && !(dict.problem && dict.st.can_retry === true)
-                                icon: "mic"
-                                label: "Start"
-                                off: !dict.up
-                                onClicked: dict.run(["start"])
+                            radius: 18
+                            color: doneArea.containsMouse ? Qt.lighter(Theme.primary, 1.1) : Theme.primary
+                            DIcon {
+                                anchors.centerIn: parent
+                                name: "check"
+                                size: 18
+                                filled: true
+                                color: Theme.onPrimary
                             }
-                            PillBtn {
+                            MouseArea {
+                                id: doneArea
                                 anchors.fill: parent
-                                visible: dict.problem && dict.st.can_retry === true
-                                icon: "refresh"
-                                label: "Retry"
-                                onClicked: dict.run(["retry"])
+                                hoverEnabled: true
+                                cursorShape: Qt.PointingHandCursor
+                                onClicked: {
+                                    dict.finishingHere = true;
+                                    dict.run(["stop", "direct", "copy"]);
+                                }
                             }
-                            PillBtn {
+                            StateLayer {
                                 anchors.fill: parent
-                                visible: dict.busy
-                                ghost: true
-                                icon: "close"
-                                label: "Cancel"
-                                onClicked: dict.run(["cancel"])
-                            }
-                            Row {
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 6
-                                visible: dict.recording
-
-                                DActionButton {
-                                    buttonSize: 36
-                                    radius: 18
-                                    iconSize: 18
-                                    iconName: "close"
-                                    iconColor: Theme.surfaceVariantText
-                                    tooltipText: "Cancel"
-                                    tooltipSide: "bottom"
-                                    onClicked: dict.run(["cancel"])
-                                }
-                                DActionButton {
-                                    buttonSize: 36
-                                    radius: 18
-                                    iconSize: 18
-                                    iconName: "auto_awesome"
-                                    iconFilled: true
-                                    iconColor: Theme.surfaceVariantText
-                                    tooltipText: "Clean up, then copy"
-                                    tooltipSide: "bottom"
-                                    onClicked: {
-                                        dict.finishingHere = true;
-                                        dict.run(["stop", "luna", "copy"]);
-                                    }
-                                }
-                                // ✓: a plain filled circle (DActionButton morphs its shape on hover).
-                                Rectangle {
-                                    width: 36
-                                    height: 36
-                                    radius: 18
-                                    color: doneArea.containsMouse ? Qt.lighter(Theme.primary, 1.1) : Theme.primary
-                                    DIcon {
-                                        anchors.centerIn: parent
-                                        name: "check"
-                                        size: 18
-                                        filled: true
-                                        color: Theme.onPrimary
-                                    }
-                                    MouseArea {
-                                        id: doneArea
-                                        anchors.fill: parent
-                                        hoverEnabled: true
-                                        cursorShape: Qt.PointingHandCursor
-                                        onClicked: {
-                                            dict.finishingHere = true;
-                                            dict.run(["stop", "direct", "copy"]);
-                                        }
-                                    }
-                                    StateLayer {
-                                        anchors.fill: parent
-                                        stateColor: "transparent"
-                                        tooltipText: "Done: copy"
-                                        tooltipSide: "bottom"
-                                        acceptedButtons: Qt.NoButton
-                                    }
-                                }
+                                stateColor: "transparent"
+                                tooltipText: "Done: copy"
+                                tooltipSide: "bottom"
+                                acceptedButtons: Qt.NoButton
                             }
                         }
                     }

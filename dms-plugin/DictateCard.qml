@@ -33,9 +33,6 @@ PluginComponent {
     readonly property bool recording: phase === "recording"
     readonly property bool busy: phase === "transcribing" || phase === "cleaning"
     readonly property bool problem: phase === "problem"
-    // Not every message is bad news: "cleaned text copied" is just information.
-    readonly property bool notice: problem && st.problem === "cleancopied"
-    readonly property bool bad: problem && !notice
     // Talking and working are the bar button's job; the card takes over only
     // when a fullscreen window hides the bar. Problems always show here.
     readonly property bool barHidden: targetScreen ? CompositorService.visibleNiriFullscreenToplevelOnScreen(targetScreen) : false
@@ -113,10 +110,8 @@ PluginComponent {
         nospeech: ["voice_over_off", "No speech heard", ""],
         mic: ["mic_off", "Mic not working", ""],
         eleven: ["cloud_off", "Didn't go through", ""],
-        livefail: ["cloud_off", "Live stopped", "full text copied"],
-        cleancopied: ["auto_awesome", "Cleaned & copied", ""],
-        nokey: ["key_off", "No API key", ""],
-        other: ["error", "Something failed", ""]
+        nokey: ["key_off", "No ElevenLabs key", ""],
+        other: ["error", "Something went wrong", ""]
     })
     readonly property var prob: problemInfo[st.problem] || problemInfo.other
 
@@ -241,7 +236,7 @@ PluginComponent {
             radius: height / 2
             color: Theme.hostSurface
             border.width: 1
-            border.color: root.bad ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.outlineVariant, 0.55)
+            border.color: root.problem ? Theme.withAlpha(Theme.error, 0.3) : Theme.withAlpha(Theme.outlineVariant, 0.55)
             opacity: root.shown ? 1 : 0
             clip: true
 
@@ -370,7 +365,7 @@ PluginComponent {
                     Rectangle {
                         anchors.fill: parent
                         radius: width / 2
-                        color: root.bad ? Theme.withAlpha(Theme.error, 0.14) : Theme.withAlpha(Theme.primary, 0.14)
+                        color: root.problem ? Theme.withAlpha(Theme.error, 0.14) : Theme.withAlpha(Theme.primary, 0.14)
                     }
                     DSpinner {
                         anchors.fill: parent
@@ -385,7 +380,7 @@ PluginComponent {
                         name: root.problem ? root.prob[0] : root.phase === "cleaning" ? "auto_awesome" : "mic"
                         filled: true
                         size: 18
-                        color: root.bad ? Theme.error : Theme.primary
+                        color: root.problem ? Theme.error : Theme.primary
                     }
                 }
 

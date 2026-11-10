@@ -16,7 +16,7 @@ use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     net::{UnixListener, UnixStream},
     signal::unix::{SignalKind, signal},
-    sync::{mpsc, oneshot, watch},
+    sync::{oneshot, watch},
     time::Instant,
 };
 
@@ -37,10 +37,6 @@ pub struct Snapshot {
     message: String,
     /// direct | luna
     mode: String,
-    /// Setting: the next recording streams live.
-    streaming: bool,
-    /// The current recording streams live.
-    live: bool,
     started_ms: u64,
     can_retry: bool,
     configured: bool,
@@ -86,22 +82,6 @@ enum Out {
 enum Stop {
     Finish(Option<Mode>, Out),
     Cancel,
-}
-
-/// What live typing got done.
-#[derive(Default)]
-struct Typed {
-    /// Something was typed into the app.
-    any: bool,
-    /// Pieces still held back (the popout was open).
-    backlog: Vec<String>,
-}
-
-#[derive(Clone, Copy, PartialEq)]
-enum Delivered {
-    /// The text is already in the app (typed live).
-    Typed,
-    Not,
 }
 
 struct Failed {
@@ -181,7 +161,6 @@ impl Daemon {
             "nospeech" => Some(3),
             "cleanfail" => Some(6),
             "paste" => Some(8),
-            "cleancopied" => Some(5),
             _ => Some(10),
         };
         self.update(|s| {
@@ -228,25 +207,12 @@ impl Daemon {
                 }
             }
             "retry" if !busy && state != "recording" => self.retry(),
-            "streaming" if state != "recording" && !busy => {
-                let mut config = self.config.lock().unwrap();
-                config.streaming = match args.first().copied() {
-                    Some("on") => true,
-                    Some("off") => false,
-                    _ => !config.streaming,
-                };
-                if let Err(error) = config.save() {
-                    eprintln!("dictate: could not save config: {error}");
-                }
-                let on = config.streaming;
-                self.update(|s| s.streaming = on);
-            }
             "popout" => {
                 let open = args.first().copied() == Some("on");
                 self.update(|s| s.popout = open);
             }
             "refresh" => self.files_changed(),
-            "start" | "stop" | "retry" | "streaming" => {}
+            "start" | "stop" | "retry" => {}
             other => return format!("unknown command: {other}"),
         }
         "ok".into()
@@ -268,20 +234,18 @@ impl Daemon {
             ctl.session
         };
         let config = self.config.lock().unwrap().clone();
-        let live = config.streaming;
         let stamp = files::new_stamp(&self.dir);
         self.update(|s| {
             s.state = "recording".into();
             s.problem.clear();
             s.message.clear();
             s.mode = mode.name().into();
-            s.live = live;
             s.started_ms = now_ms();
             s.can_retry = false;
             s.configured = crate::api_key().is_ok();
             s.current = stamp.clone();
         });
-        tokio::spawn(self.clone().run(id, stamp, mode, live, config, rx));
+        tokio::spawn(self.clone().run(id, stamp, mode, config, rx));
     }
 
     async fn run(
@@ -289,7 +253,6 @@ impl Daemon {
         id: u64,
         stamp: String,
         mode: Mode,
-        live: bool,
         config: Config,
         mut stop_rx: oneshot::Receiver<Stop>,
     ) {
@@ -307,29 +270,7 @@ impl Daemon {
             Err(error) => return self.problem(id, "other", format!("{error:#}"), None),
         };
 
-        // Live mode: audio also goes to the WebSocket while we record.
-        let (audio_tx, audio_rx) = mpsc::unbounded_channel::<Vec<u8>>();
-        let mut audio_tx = live.then_some(audio_tx);
-        // Live mode types each finished piece of text straight into the focused app.
-        let mut typer_task = None;
-        let mut stream_task = if live {
-            let key = key.clone();
-            let language = config.language.clone();
-            let (seg_tx, seg_rx) = mpsc::unbounded_channel::<String>();
-            typer_task = Some(tokio::spawn(self.clone().typer(seg_rx)));
-            Some(tokio::spawn(async move {
-                eleven::stream(&key, &language, audio_rx, move |seg| {
-                    let _ = seg_tx.send(seg);
-                })
-                .await
-            }))
-        } else {
-            drop(audio_rx);
-            None
-        };
-
         let mut bytes = 0usize;
-        let mut pending: Vec<u8> = Vec::new();
         let mut buf = vec![0u8; 4096];
         let mut window: Vec<u8> = Vec::new();
         let mut last_level = Instant::now();
@@ -345,12 +286,6 @@ impl Daemon {
                         bytes += n;
                         encoder.write(data);
                         window.extend_from_slice(data);
-                        if let Some(tx) = &audio_tx {
-                            pending.extend_from_slice(data);
-                            if pending.len() >= 3200 {
-                                let _ = tx.send(std::mem::take(&mut pending));
-                            }
-                        }
                         if last_level.elapsed() >= Duration::from_millis(50) {
                             let level = audio::level(&window);
                             window.clear();
@@ -370,25 +305,12 @@ impl Daemon {
         self.level.send_replace(0.0);
         bytes += rest.len();
         encoder.write(&rest);
-        if let Some(tx) = audio_tx.take() {
-            pending.extend_from_slice(&rest);
-            if !pending.is_empty() {
-                let _ = tx.send(pending);
-            }
-            // Dropping the sender tells the stream to commit and finish.
-        }
 
         let remove_take = |d: &Daemon| {
             let _ = std::fs::remove_file(files::audio(&d.dir, &stamp));
         };
         let (final_mode, out) = match stop {
             Stop::Cancel => {
-                if let Some(task) = stream_task.take() {
-                    task.abort();
-                }
-                if let Some(task) = typer_task.take() {
-                    task.abort();
-                }
                 let _ = encoder.finish().await;
                 remove_take(&self);
                 return self.idle(id);
@@ -397,12 +319,6 @@ impl Daemon {
         };
 
         if bytes < BYTES_PER_SEC * 3 / 10 {
-            if let Some(task) = stream_task.take() {
-                task.abort();
-            }
-            if let Some(task) = typer_task.take() {
-                task.abort();
-            }
             let _ = encoder.finish().await;
             remove_take(&self);
             if mic_lost {
@@ -422,78 +338,17 @@ impl Daemon {
         }
         self.files_changed();
 
-        let mut text = String::new();
-        let mut typed = Typed::default();
-        if let Some(task) = stream_task.take() {
-            match tokio::time::timeout(Duration::from_secs(10), task).await {
-                Ok(Ok(Ok(t))) => text = t,
-                Ok(Ok(Err(e))) => eprintln!("dictate: live failed, uploading instead: {e:#}"),
-                _ => eprintln!("dictate: live did not finish, uploading instead"),
-            }
-        }
-        if let Some(task) = typer_task.take() {
-            // The stream is done, so the typer gets no more pieces and finishes.
-            typed = tokio::time::timeout(Duration::from_secs(10), task).await.ok().and_then(|r| r.ok()).unwrap_or_default();
-        }
-        // Live broke halfway: part is already typed, so don't paste on top of it.
-        let live_broke = typed.any && text.trim().is_empty();
-        if text.trim().is_empty() {
-            let result = match std::fs::read(&ogg) {
-                Ok(data) => eleven::transcribe(&self.http, &key, &config.language, data).await,
-                Err(error) => Err(anyhow::anyhow!("the audio file is missing: {error}")),
-            };
-            match result {
-                Ok(t) => text = t,
-                Err(error) => {
-                    let failed = saved.is_ok().then(|| Failed { stamp: stamp.clone(), mode: final_mode, out });
-                    return self.problem(id, "eleven", format!("{error:#}"), failed);
-                }
-            }
-        }
-        if live_broke {
-            let _ = files::write_text(&files::raw(&self.dir, &stamp), &text);
-            let _ = output::copy(&text).await;
-            self.files_changed();
-            return self.problem(id, "livefail", "Live stopped halfway; the full text is on your clipboard".into(), None);
-        }
-        // Pieces typed live are done; whatever is left (popout was open) goes out now.
-        let rest = if typed.any && out == Out::Paste {
-            for piece in &typed.backlog {
-                if let Err(error) = output::type_text(&format!(" {piece}")).await {
-                    eprintln!("dictate: typing failed: {error:#}");
-                }
-            }
-            Delivered::Typed
-        } else {
-            Delivered::Not
+        let result = match std::fs::read(&ogg) {
+            Ok(data) => eleven::transcribe(&self.http, &key, &config.language, data).await,
+            Err(error) => Err(anyhow::anyhow!("the audio file is missing: {error}")),
         };
-        self.deliver(id, stamp, text, final_mode, out, rest, &config).await;
-    }
-
-    /// Types live pieces as they arrive, but holds them while the popout is open
-    /// (it has the keyboard). Returns what is still held at the end.
-    async fn typer(self: Arc<Self>, mut rx: mpsc::UnboundedReceiver<String>) -> Typed {
-        let mut typed = Typed::default();
-        let mut held: std::collections::VecDeque<String> = Default::default();
-        loop {
-            tokio::select! {
-                piece = rx.recv() => match piece {
-                    Some(p) => held.push_back(p),
-                    None => break,
-                },
-                _ = tokio::time::sleep(Duration::from_millis(200)), if !held.is_empty() => {}
-            }
-            while !self.snap.borrow().popout {
-                let Some(piece) = held.pop_front() else { break };
-                let text = if typed.any { format!(" {piece}") } else { piece };
-                match output::type_text(&text).await {
-                    Ok(()) => typed.any = true,
-                    Err(error) => eprintln!("dictate: typing failed: {error:#}"),
-                }
+        match result {
+            Ok(text) => self.deliver(id, stamp, text, final_mode, out, &config).await,
+            Err(error) => {
+                let failed = saved.is_ok().then(|| Failed { stamp: stamp.clone(), mode: final_mode, out });
+                self.problem(id, "eleven", format!("{error:#}"), failed)
             }
         }
-        typed.backlog = held.into();
-        typed
     }
 
     async fn deliver(
@@ -503,7 +358,6 @@ impl Daemon {
         text: String,
         mode: Mode,
         out: Out,
-        done: Delivered,
         config: &Config,
     ) {
         if !self.is_current(id) {
@@ -533,13 +387,9 @@ impl Daemon {
                 return;
             }
         }
-        // Live already typed the raw text: a cleaned version can only go to the clipboard.
-        let cleaned_after_typing = done == Delivered::Typed && mode == Mode::Luna && clean_failed.is_none();
-        let delivered = match (out, done) {
-            (Out::Copy, _) => output::copy(&text).await,
-            (Out::Paste, Delivered::Typed) if cleaned_after_typing => output::copy(&text).await,
-            (Out::Paste, Delivered::Typed) => Ok(()),
-            (Out::Paste, Delivered::Not) => output::paste(&text).await,
+        let delivered = match out {
+            Out::Copy => output::copy(&text).await,
+            Out::Paste => output::paste(&text).await,
         };
         files::prune(&self.dir, config.keep, &stamp);
         self.files_changed();
@@ -548,9 +398,6 @@ impl Daemon {
         }
         if let Some(message) = clean_failed {
             return self.problem(id, "cleanfail", message, None);
-        }
-        if cleaned_after_typing {
-            return self.problem(id, "cleancopied", String::new(), None);
         }
         self.idle(id);
     }
@@ -564,7 +411,6 @@ impl Daemon {
             s.problem.clear();
             s.message.clear();
             s.mode = mode.name().into();
-            s.live = false;
             s.can_retry = false;
             s.current = stamp.clone();
         });
@@ -577,7 +423,7 @@ impl Daemon {
             }
             .await;
             match result {
-                Ok(text) => d.deliver(id, stamp, text, mode, out, Delivered::Not, &config).await,
+                Ok(text) => d.deliver(id, stamp, text, mode, out, &config).await,
                 Err(error) => d.problem(id, "eleven", format!("{error:#}"), Some(Failed { stamp, mode, out })),
             }
         });
@@ -639,7 +485,6 @@ pub async fn serve() -> Result<()> {
         daemon: true,
         state: "idle".into(),
         mode: "direct".into(),
-        streaming: config.streaming,
         configured: crate::api_key().is_ok(),
         ..Default::default()
     };

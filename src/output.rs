@@ -59,24 +59,6 @@ pub async fn paste(text: &str) -> Result<()> {
     Ok(())
 }
 
-/// Types text into whatever has focus (live mode), like a keyboard would.
-/// Newlines become spaces so nothing gets sent by an Enter press.
-pub async fn type_text(text: &str) -> Result<()> {
-    let text: String = text.chars().map(|c| if c == '\n' || c == '\r' { ' ' } else { c }).collect();
-    // Testing: DICTATE_TYPE_LOG=<file> collects what would be typed.
-    if let Some(log) = std::env::var_os("DICTATE_TYPE_LOG") {
-        use std::io::Write;
-        let mut f = std::fs::OpenOptions::new().create(true).append(true).open(log)?;
-        write!(f, "{text}")?;
-        return Ok(());
-    }
-    if std::env::var_os("DICTATE_NO_PASTE").is_some() {
-        return Ok(());
-    }
-    tokio::task::spawn_blocking(move || crate::keyboard::type_text(&text)).await??;
-    Ok(())
-}
-
 pub async fn luna(command: &str, text: &str, timeout_secs: u64) -> Result<String> {
     let cleaned = pipe(command, &[], text, Duration::from_secs(timeout_secs)).await?;
     let cleaned = cleaned.trim();

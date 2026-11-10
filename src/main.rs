@@ -30,7 +30,6 @@ USAGE:
                                 stop and paste (luna = clean up first, copy = clipboard only)
   dictate cancel                throw the recording away / dismiss a problem
   dictate retry                 transcribe the last failed take again
-  dictate streaming on|off|toggle
   dictate status                print the state once (JSON)
   dictate watch                 print the state on every change (JSON lines)
   dictate set-key               save the ElevenLabs API key (read from stdin)
@@ -48,8 +47,6 @@ TAKES (plain files in ~/Music/Dictations, no daemon needed):
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
-    /// Live transcription over a WebSocket instead of one upload at the end.
-    pub streaming: bool,
     /// ISO language code, or "auto".
     pub language: String,
     /// Command that cleans the transcript in "luna" mode (stdin -> stdout).
@@ -62,7 +59,6 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            streaming: false,
             language: "en".into(),
             luna_command: home().join(".local/bin/voxtype-luna-cleanup").display().to_string(),
             luna_timeout_secs: 95,
@@ -77,15 +73,6 @@ impl Config {
             .ok()
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default()
-    }
-
-    pub fn save(&self) -> Result<()> {
-        let dir = config_dir();
-        std::fs::create_dir_all(&dir)?;
-        let tmp = dir.join("config.json.tmp");
-        std::fs::write(&tmp, serde_json::to_string_pretty(self)? + "\n")?;
-        std::fs::rename(tmp, dir.join("config.json"))?;
-        Ok(())
     }
 }
 
@@ -270,9 +257,7 @@ fn main() -> Result<()> {
     match cmd {
         "serve" => runtime.block_on(daemon::serve()),
         "list" | "transcribe" | "clean" | "copy" | "reveal" | "trash" | "folder" => runtime.block_on(takes(&args)),
-        // Types text into the focused field the way live mode does (for testing).
-        "type" => keyboard::type_text(&args[1..].join(" ")),
-        "toggle" | "start" | "stop" | "cancel" | "retry" | "streaming" | "popout" | "refresh" | "status" | "watch" => {
+        "toggle" | "start" | "stop" | "cancel" | "retry" | "popout" | "refresh" | "status" | "watch" => {
             runtime.block_on(client(args.join(" ")))
         }
         other => {

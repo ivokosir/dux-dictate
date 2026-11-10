@@ -1,10 +1,8 @@
-//! A tiny Wayland virtual keyboard that types with real key codes.
+//! A tiny Wayland virtual keyboard that presses Ctrl+V with real key codes.
 //!
-//! wtype gives every character a made-up key (the first one even arrives as
-//! "Escape"). Simple text boxes don't care, but apps that look at the key code
-//! (Electron apps like Claude) dropped the spaces. Here letters, digits,
-//! punctuation and space sit on their real US keys, so apps see a normal
-//! keyboard; only rare characters (č, —, “) get spare keys.
+//! wtype gives every key a made-up code. Simple text boxes don't care, but
+//! apps that look at the key code (Electron apps like Claude) can miss it.
+//! Here the keys sit where they are on a US keyboard, so apps see a normal one.
 
 use std::{
     io::Write,
@@ -77,68 +75,9 @@ const US: &[(u32, &str, &str)] = &[
 
 const SHIFT_KEY: u32 = 42;
 const CTRL_KEY: u32 = 29;
-const SHIFT: u32 = 1;
 const CTRL: u32 = 4;
-/// Keys apps ignore (F13–F24 and unused codes) for characters not on a US keyboard.
-const SPARE: &[u32] = &[183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 197, 198, 199, 84];
-
-/// Where a character lives: (evdev key, needs shift).
-fn us_key(c: char) -> Option<(u32, bool)> {
-    let ascii = |name: &str| -> Option<char> {
-        match name {
-            n if n.chars().count() == 1 => n.chars().next(),
-            _ => Some(match name {
-                "exclam" => '!',
-                "at" => '@',
-                "numbersign" => '#',
-                "dollar" => '$',
-                "percent" => '%',
-                "asciicircum" => '^',
-                "ampersand" => '&',
-                "asterisk" => '*',
-                "parenleft" => '(',
-                "parenright" => ')',
-                "minus" => '-',
-                "underscore" => '_',
-                "equal" => '=',
-                "plus" => '+',
-                "Tab" => '\t',
-                "bracketleft" => '[',
-                "braceleft" => '{',
-                "bracketright" => ']',
-                "braceright" => '}',
-                "semicolon" => ';',
-                "colon" => ':',
-                "apostrophe" => '\'',
-                "quotedbl" => '"',
-                "grave" => '`',
-                "asciitilde" => '~',
-                "backslash" => '\\',
-                "bar" => '|',
-                "comma" => ',',
-                "less" => '<',
-                "period" => '.',
-                "greater" => '>',
-                "slash" => '/',
-                "question" => '?',
-                "space" => ' ',
-                _ => return None,
-            }),
-        }
-    };
-    US.iter().find_map(|&(key, low, high)| {
-        if ascii(low) == Some(c) {
-            Some((key, false))
-        } else if ascii(high) == Some(c) {
-            Some((key, true))
-        } else {
-            None
-        }
-    })
-}
-
-/// A keymap with the US keys plus `extra` characters on spare keys.
-fn keymap(extra: &[(u32, char)]) -> String {
+/// A plain US keymap.
+fn keymap() -> String {
     let mut codes = String::new();
     let mut syms = String::new();
     let mut add = |key: u32, sym: String| {
@@ -151,9 +90,6 @@ fn keymap(extra: &[(u32, char)]) -> String {
     }
     add(SHIFT_KEY, "Shift_L".into());
     add(CTRL_KEY, "Control_L".into());
-    for &(key, c) in extra {
-        add(key, format!("U{:04X}", c as u32));
-    }
     format!(
         "xkb_keymap {{\n\
          xkb_keycodes \"dictate\" {{\n  minimum = 8;\n  maximum = 255;\n{codes}}};\n\
@@ -195,8 +131,8 @@ impl Keyboard {
         Ok(Self { conn, queue, vk, start: Instant::now(), mods: 0 })
     }
 
-    fn load(&mut self, extra: &[(u32, char)]) -> Result<()> {
-        let text = keymap(extra);
+    fn load(&mut self) -> Result<()> {
+        let text = keymap();
         let fd = unsafe {
             let raw = libc::memfd_create(c"dictate-keymap".as_ptr(), libc::MFD_CLOEXEC);
             if raw < 0 {
@@ -240,41 +176,10 @@ impl Keyboard {
     }
 }
 
-/// Types the text into whatever has focus.
-pub fn type_text(text: &str) -> Result<()> {
-    let mut kb = Keyboard::open()?;
-    let chars: Vec<char> = text.chars().collect();
-    let mut at = 0;
-    while at < chars.len() {
-        // Take as much text as fits: every rare character needs a spare key.
-        let mut extra: Vec<(u32, char)> = Vec::new();
-        let mut end = at;
-        while end < chars.len() {
-            let c = chars[end];
-            if us_key(c).is_none() && !extra.iter().any(|&(_, e)| e == c) {
-                if extra.len() == SPARE.len() {
-                    break;
-                }
-                extra.push((SPARE[extra.len()], c));
-            }
-            end += 1;
-        }
-        kb.load(&extra)?;
-        for &c in &chars[at..end] {
-            let (key, shift) = us_key(c)
-                .or_else(|| extra.iter().find(|&&(_, e)| e == c).map(|&(k, _)| (k, false)))
-                .expect("every character has a key");
-            kb.tap(key, if shift { SHIFT } else { 0 })?;
-        }
-        at = end;
-    }
-    kb.close()
-}
-
 /// Ctrl+V, on the real V key.
 pub fn paste_keys() -> Result<()> {
     let mut kb = Keyboard::open()?;
-    kb.load(&[])?;
+    kb.load()?;
     kb.tap(47, CTRL)?;
     kb.close()
 }
