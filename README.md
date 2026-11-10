@@ -1,4 +1,4 @@
-# dictate + meeting
+# dux-dictate
 
 One Dux Shell (the `dms` command, once DankMaterialShell) bar button for two things that can run at the same time:
 

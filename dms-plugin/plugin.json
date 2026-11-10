@@ -3,7 +3,7 @@
   "name": "Dictate & Meeting",
   "description": "One bar button for two things. Dictate: talk and the text is pasted (ElevenLabs Scribe). Record: record a meeting, your mic + what you hear. Both can run at the same time.",
   "version": "0.2.0",
-  "author": "dms-dictate contributors",
+  "author": "dux-dictate contributors",
   "type": "composite",
   "capabilities": [
     "daemon",
