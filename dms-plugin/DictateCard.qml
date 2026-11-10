@@ -316,25 +316,29 @@ PluginComponent {
                 visible: root.recording
                 enabled: card.hovered
 
-                Morph {
-                    on: card.hovered
-                    turn: -90
-                    width: root.unit
-                    height: root.unit
-                    RoundBtn {
-                        icon: "close"
-                        onClicked: root.run(["cancel"])
+                // ✕ and ✨ have no background, so they sit edge to edge: their own
+                // padding is the gap (the icons are 14 px apart, like ✨ and ✓).
+                Row {
+                    Morph {
+                        on: card.hovered
+                        turn: -90
+                        width: root.unit
+                        height: root.unit
+                        RoundBtn {
+                            icon: "close"
+                            onClicked: root.run(["cancel"])
+                        }
                     }
-                }
-                Morph {
-                    on: card.hovered
-                    turn: -90
-                    width: root.unit
-                    height: root.unit
-                    RoundBtn {
-                        icon: "auto_awesome"
-                        hoverTint: Theme.primary
-                        onClicked: root.run(["stop", "luna"])
+                    Morph {
+                        on: card.hovered
+                        turn: -90
+                        width: root.unit
+                        height: root.unit
+                        RoundBtn {
+                            icon: "auto_awesome"
+                            hoverTint: Theme.primary
+                            onClicked: root.run(["stop", "luna"])
+                        }
                     }
                 }
                 Morph {

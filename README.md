@@ -1,6 +1,6 @@
 # dictate + meeting
 
-One DankMaterialShell bar button for two things that can run at the same time:
+One Dux Shell (the `dms` command, once DankMaterialShell) bar button for two things that can run at the same time:
 
 - **Dictate:** talk, and the text is pasted where you are typing (ElevenLabs Scribe).
 - **Record:** record a meeting, your mic + what you hear (e.g. a WhatsApp call), into one file.
@@ -44,7 +44,7 @@ the files
 dictate set-key        # only if no key was found
 ```
 
-The installer builds the `dictate` binary to `~/.local/bin/dictate`, starts `dictate.service`, links `meetrec` and `record-meeting` into `~/.local/bin`, and links the DMS plugin. It reuses the key from `voxtype-elevenlabs-adapter` if one exists. Then add the **Dictate & Meeting** widget to your bar in DMS settings and bind a key:
+The installer builds the `dictate` binary to `~/.local/bin/dictate`, starts `dictate.service`, links `meetrec` and `record-meeting` into `~/.local/bin`, and links the shell plugin. It reuses the key from `voxtype-elevenlabs-adapter` if one exists. Then add the **Dictate & Meeting** widget to your bar in the shell's settings and bind a key:
 
 ```kdl
 Mod+B { spawn "dictate" "toggle" "direct"; }
@@ -61,7 +61,7 @@ dictate toggle [direct|luna]   start, or stop and paste
 dictate stop [direct|luna] [copy]
 dictate cancel                 throw the recording away / dismiss a problem
 dictate retry                  transcribe the last failed take again
-dictate status | watch         state as JSON (the DMS plugin uses watch)
+dictate status | watch         state as JSON (the plugin uses watch)
 
 dictate list [n]               takes in ~/Music/Dictations as JSON
 dictate transcribe <take>      (re)make <take>.txt
@@ -107,7 +107,7 @@ Dictate   pw-record -> dictate daemon -> ffmpeg -> ~/Music/Dictations/<time>.ogg
                     -> optional Luna cleanup -> <time>.clean.txt -> wl-copy + Ctrl+V (built-in virtual keyboard)
 Meeting   meetrec start -> ffmpeg (speaker monitor + mic, mixed) as meetrec.service -> ~/Music/Meetings/<time>_<name>.ogg
 
-DMS plugin (dms-plugin/)
+Shell plugin (dms-plugin/)
   DictateWidget.qml   the bar button + popout
                       <- `dictate watch` (JSON lines), <- $XDG_RUNTIME_DIR/meetrec/current (watched file)
   DictateCard.qml     the top-right card while dictating
@@ -115,6 +115,6 @@ DMS plugin (dms-plugin/)
 
 Layout: `src/` is the dictate daemon (Rust), `bin/` is the meeting recorder (bash), `dms-plugin/` is the one plugin for both.
 
-Adding or renaming a file in `dms-plugin/` needs a DMS restart (Qt remembers the folder listing); editing a file only needs `dms ipc call plugins reload dictate`.
+Adding or renaming a file in `dms-plugin/` needs a shell restart (Qt remembers the folder listing); editing a file only needs `dms ipc call plugins reload dictate`.
 
 For testing dictate without a mic or pasting: `DICTATE_TEST_AUDIO=file.mp3 DICTATE_NO_PASTE=1 DICTATE_DIR=/tmp/takes dictate serve`.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs both halves and the one DankMaterialShell plugin:
+# Installs both halves and the one Dux Shell (dms) plugin:
 #   dictate   (Rust daemon, user service)   talk and paste
 #   meetrec   (script)                      record a meeting
 set -euo pipefail
@@ -25,7 +25,10 @@ ln -sfn "$PWD/bin/meetrec" "$bin/meetrec"
 ln -sfn "$PWD/bin/record-meeting" "$bin/record-meeting"
 
 # One plugin for both. The old separate "Meeting Recorder" plugin goes away.
-plugins="$conf/DankMaterialShell/plugins"
+# Dux Shell keeps its config in ~/.config/dms (older DankMaterialShell: ~/.config/DankMaterialShell).
+shell_conf="$conf/dms"
+[[ -d "$shell_conf" ]] || shell_conf="$conf/DankMaterialShell"
+plugins="$shell_conf/plugins"
 mkdir -p "$plugins"
 ln -sfn "$PWD/dms-plugin" "$plugins/dictate"
 if [[ -L "$plugins/meetingRecorder" ]]; then
@@ -39,5 +42,5 @@ systemctl --user restart dictate.service
 dms ipc call plugins reload dictate >/dev/null 2>&1 || true
 
 [[ -s "$conf/dictate/api-key" ]] || echo "Now run: dictate set-key"
-echo "Installed. Add the 'Dictate & Meeting' widget to your bar in DMS settings, and bind a key in niri, e.g.:"
+echo "Installed. Add the 'Dictate & Meeting' widget to your bar in the shell's settings, and bind a key in niri, e.g.:"
 echo '  Mod+B { spawn "dictate" "toggle" "direct"; }'

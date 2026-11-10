@@ -2,7 +2,7 @@
 name = "dictate"
 version = "0.1.0"
 edition = "2024"
-description = "Talk, and the text is pasted where you type. ElevenLabs Scribe with a DankMaterialShell card."
+description = "Talk, and the text is pasted where you type. ElevenLabs Scribe with a Dux Shell card."
 license = "MIT"
 
 [dependencies]

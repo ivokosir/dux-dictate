@@ -495,7 +495,7 @@ PluginComponent {
 
     // ---- bar pill ----------------------------------------------------------------------
     //
-    //   idle        mic
+    //   idle        mic (filled, like when it is on: the colour is the state)
     //   dictating   teal fill, mic + timer          (working: the mic breathes)
     //   meeting     red fill, ◉ + the meeting's timer
     //   both        red fill (the meeting matters more), ◉ 12:03  mic 0:07
@@ -525,7 +525,8 @@ PluginComponent {
         name: dict.phase === "down" ? "mic_off"
             : dict.barError ? dict.problemIcon[dict.st.problem]
             : dict.phase === "cleaning" ? "auto_awesome" : "mic"
-        filled: dict.active
+        // Always the filled mic; the colour says whether it is on.
+        filled: true
         size: root.iconSize
         color: meet.recording ? "white"
             : dict.phase === "down" ? Theme.surfaceVariantText
@@ -1470,31 +1471,36 @@ PluginComponent {
                         }
 
                         // Talking: ✕ ✨ ✓.
-                        DActionButton {
+                        // ✕ and ✨ have no background, so their own padding is the gap:
+                        // they sit edge to edge, and the icons end up as far apart
+                        // (14 px) as ✨ is from the ✓ circle.
+                        Row {
                             visible: dict.recording
-                            buttonSize: 36
-                            // Always a circle (DMS makes 36 px buttons rounded squares).
-                            radius: 18
-                            iconSize: 18
-                            iconName: "close"
-                            iconColor: Theme.surfaceVariantText
-                            tooltipText: "Cancel"
-                            tooltipSide: "bottom"
-                            onClicked: dict.run(["cancel"])
-                        }
-                        DActionButton {
-                            visible: dict.recording
-                            buttonSize: 36
-                            radius: 18
-                            iconSize: 18
-                            iconName: "auto_awesome"
-                            iconFilled: true
-                            iconColor: Theme.surfaceVariantText
-                            tooltipText: "Clean up, then copy"
-                            tooltipSide: "bottom"
-                            onClicked: {
-                                dict.finishingHere = true;
-                                dict.run(["stop", "luna", "copy"]);
+                            anchors.verticalCenter: parent.verticalCenter
+
+                            DActionButton {
+                                buttonSize: 32
+                                radius: 16
+                                iconSize: 18
+                                iconName: "close"
+                                iconColor: Theme.surfaceVariantText
+                                tooltipText: "Cancel"
+                                tooltipSide: "bottom"
+                                onClicked: dict.run(["cancel"])
+                            }
+                            DActionButton {
+                                buttonSize: 32
+                                radius: 16
+                                iconSize: 18
+                                iconName: "auto_awesome"
+                                iconFilled: true
+                                iconColor: Theme.surfaceVariantText
+                                tooltipText: "Clean up, then copy"
+                                tooltipSide: "bottom"
+                                onClicked: {
+                                    dict.finishingHere = true;
+                                    dict.run(["stop", "luna", "copy"]);
+                                }
                             }
                         }
                         // ✓: a plain filled circle (DActionButton morphs its shape on hover).
