@@ -25,7 +25,7 @@ the files
 - **Card:** a small pill in the top-right corner, only for what the bar can't show. Problems show there as a short red line (with ⟳ retry and ✕). And while a fullscreen window covers the bar, it shows the take: glowing mic + timer; put the mouse on it and it turns into ✕ (throw away), ✨ (clean up with Luna, then paste) and ✓ (paste).
 - **Popout:** Dictate, then timer + ✕ ✨ ✓ while you talk, Cancel while it works, Retry after a failed upload. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open.
 - **Dictations are just files:** every take is `~/Music/Dictations/<time>.ogg` (+ `.txt`, + `.clean.txt`). Not transcribed → ⟳ Transcribe. Transcribed → ✨ clean up (or copy the cleaned text), 📋 copy raw text. The last 20 are kept; older ones go to the trash.
-- **One upload when you stop:** the whole recording goes to ElevenLabs Scribe (`scribe_v2`), which hears everything at once, and the text is pasted with Ctrl+V from a built-in virtual keyboard that sends real key codes. About 1 s of waiting for a short take, 3–4 s for a few minutes. (There used to be a live mode that typed while you talked; its realtime model was less correct, so it is gone.)
+- **One upload when you stop:** the whole recording goes to ElevenLabs Scribe (`scribe_v3`), which hears everything at once, and the text is pasted with Ctrl+V from a built-in virtual keyboard that sends real key codes. About 1 s of waiting for a short take, 3–4 s for a few minutes. (There used to be a live mode that typed while you talked; its realtime model was less correct, so it is gone.)
 - **No time limit:** the audio is written to disk while you talk, so long takes are fine and nothing is lost if something fails.
 
 ## Meeting
@@ -33,7 +33,7 @@ the files
 - **Popout:** Record, which turns into a red Stop with the time. **Meetings** lists the newest 5 recordings, *Show N more* for all of them, with Open folder and Delete all (asks first, goes to the trash) like Dictations. The meeting being recorded is the first row; click it to name it.
 - Files are `~/Music/Meetings/2026-11-09_14-30-00_<name>.ogg`. The name is exactly what you type (spaces and all); only characters a file name can't hold (`/ \ : * ? " < > |`) are dropped. Nothing else stores names.
 - On each recording (hover it): **Rename**, **Transcribe**, **Copy file** (paste into a chat/browser/file manager), **Show in folder**, **Delete** (goes to the trash, with its transcript). Click the row to play it.
-- **Transcribe** sends the recording to ElevenLabs (Scribe, with speakers) in the background and saves `<recording>.txt` next to it, in ElevenLabs' own text format: `00:00:04,400 --> 00:00:09,820 [speaker_1]` and then what was said. Click **Transcript** to open it; the same button then **copies the transcript** text. Renaming or deleting a recording takes its transcript along.
+- **Transcribe** sends the recording to ElevenLabs (Scribe v3, with speakers) in the background and saves `<recording>.txt` next to it, in ElevenLabs' own text format: `00:00:04,400 --> 00:00:09,820 [speaker_1]` and then what was said. Click **Transcript** to open it; the same button then **copies the transcript** text. Renaming or deleting a recording takes its transcript along.
 - It records as a user service (`meetrec.service`), so it keeps going if the bar restarts.
 
 ## Install
@@ -104,7 +104,7 @@ dms ipc call meetrec rename        jump to naming the meeting
 
 ```text
 Dictate   pw-record -> dictate daemon -> ffmpeg -> ~/Music/Dictations/<time>.ogg (while you talk)
-                    -> ElevenLabs (upload the .ogg, scribe_v2) -> <time>.txt
+                    -> ElevenLabs (upload the .ogg, scribe_v3) -> <time>.txt
                     -> optional Luna cleanup -> <time>.clean.txt -> wl-copy + Ctrl+V (built-in virtual keyboard)
 Meeting   meetrec start -> ffmpeg (speaker monitor + mic, mixed) as meetrec.service -> ~/Music/Meetings/<time>_<name>.ogg
 

@@ -289,7 +289,7 @@ cmd__tx() {
   trap 'rm -f "$resp" "$resp.err"' EXIT
   code=$(curl -sS --max-time 3600 -o "$resp" -w '%{http_code}' \
     -H @<(printf 'xi-api-key: %s\n' "$(api_key)") \
-    -F model_id=scribe_v2 -F diarize=true -F tag_audio_events=true \
+    -F model_id=scribe_v3 -F diarize=true -F tag_audio_events=true \
     -F 'additional_formats=[{"format":"txt","include_speakers":true,"include_timestamps":true}]' \
     -F "file=@-;filename=$(basename "$file" | tr -d ';"')" \
     https://api.elevenlabs.io/v1/speech-to-text < "$file" 2>"$resp.err") || code=000

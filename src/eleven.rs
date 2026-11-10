@@ -6,6 +6,8 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 const API: &str = "https://api.elevenlabs.io";
+/// The most accurate Scribe for recorded audio.
+const MODEL: &str = "scribe_v3";
 
 /// Uploads a whole recording (here: the take's Ogg Opus file).
 pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, audio: Vec<u8>) -> Result<String> {
@@ -17,7 +19,7 @@ pub async fn transcribe(client: &reqwest::Client, key: &str, language: &str, aud
     let part = reqwest::multipart::Part::bytes(audio).file_name("audio.ogg").mime_str("audio/ogg")?;
     let mut form = reqwest::multipart::Form::new()
         .part("file", part)
-        .text("model_id", "scribe_v2")
+        .text("model_id", MODEL)
         .text("tag_audio_events", "false")
         .text("diarize", "false")
         .text("timestamps_granularity", "none");
