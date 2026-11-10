@@ -95,18 +95,6 @@ cmd_stop() {
   : > "$STATE"
   [ -n "$out" ] && [ -f "$out" ] || exit 0
   echo "$out"
-  # A notification with quick actions; runs on its own so stop returns at once.
-  if command -v notify-send >/dev/null; then
-    setsid -f bash -c '
-      out=$1; self=$2
-      act=$(notify-send -a "Meeting Recorder" -i audio-x-generic \
-        -A copy="Copy file" -A reveal="Show in folder" \
-        "Recording saved" "$(basename "$out") · $(du -h "$out" | cut -f1)")
-      case "$act" in
-        copy) "$self" copy "$out" ;;
-        reveal) "$self" reveal "$out" ;;
-      esac' _ "$out" "$(readlink -f "$0")" >/dev/null 2>&1 </dev/null
-  fi
 }
 
 cmd_status() {

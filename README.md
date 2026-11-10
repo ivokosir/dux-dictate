@@ -34,7 +34,6 @@ the files
 - Files are `~/Music/Meetings/2026-11-09_14-30-00_<name>.ogg`. The name is exactly what you type (spaces and all); only characters a file name can't hold (`/ \ : * ? " < > |`) are dropped. Nothing else stores names.
 - On each recording (hover it): **Rename**, **Transcribe**, **Copy file** (paste into a chat/browser/file manager), **Show in folder**, **Delete** (goes to the trash, with its transcript). Click the row to play it.
 - **Transcribe** sends the recording to ElevenLabs (Scribe, with speakers) in the background and saves `<recording>.txt` next to it, in ElevenLabs' own text format: `00:00:04,400 --> 00:00:09,820 [speaker_1]` and then what was said. Click **Transcript** to open it; the same button then **copies the transcript** text. Renaming or deleting a recording takes its transcript along.
-- When you stop, a notification offers Copy file / Show in folder too.
 - It records as a user service (`meetrec.service`), so it keeps going if the bar restarts.
 
 ## Install
