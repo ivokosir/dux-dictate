@@ -44,7 +44,7 @@ the files
 dictate set-key        # only if no key was found
 ```
 
-The installer builds the `dictate` binary to `~/.local/bin/dictate`, starts `dictate.service`, links `meetrec` and `record-meeting` into `~/.local/bin`, and links the shell plugin. It reuses the key from `voxtype-elevenlabs-adapter` if one exists. Then add the **Dictate & Meeting** widget to your bar in the shell's settings and bind a key:
+The installer builds the `dictate` binary to `~/.local/bin/dictate`, starts `dictate.service`, links `meetrec` and `record-meeting` into `~/.local/bin`, and links the shell plugin. It also links `dictate-clean` (the ✨ clean-up) and puts its prompt in `~/.config/dictate/cleanup-prompt.txt`. Then add the **Dictate & Meeting** widget to your bar in the shell's settings and bind a key:
 
 ```kdl
 Mod+B { spawn "dictate" "toggle" "direct"; }
@@ -52,7 +52,9 @@ Mod+B { spawn "dictate" "toggle" "direct"; }
 
 Meeting needs `ffmpeg`, `pactl` (PipeWire/PulseAudio), `wl-clipboard`, `libnotify`, `curl`, `python3`.
 
-ElevenLabs key: `$ELEVENLABS_API_KEY`, or `~/.config/dictate/api-key` (meetrec also looks in `~/.config/meetrec/api-key` and `~/.config/voxtype-elevenlabs-adapter/api-key`).
+ElevenLabs key: `$ELEVENLABS_API_KEY`, or `~/.config/dictate/api-key` (meetrec also looks in `~/.config/meetrec/api-key`).
+
+✨ clean-up runs `dictate-clean`: it sends the transcript to Luna through the `codex` command and prints the tidied text. Any command that reads stdin and writes stdout works as `luna_command`.
 
 ## Commands
 
@@ -93,7 +95,7 @@ dms ipc call meetrec rename        jump to naming the meeting
 ```json
 {
   "language": "en",
-  "luna_command": "/home/you/.local/bin/voxtype-luna-cleanup",
+  "luna_command": "/home/you/.local/bin/dictate-clean",
   "luna_timeout_secs": 95,
   "keep": 20
 }

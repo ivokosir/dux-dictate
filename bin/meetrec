@@ -248,8 +248,7 @@ cmd_rename() {
 api_key() {
   if [ -n "${ELEVENLABS_API_KEY:-}" ]; then printf '%s' "$ELEVENLABS_API_KEY"; return; fi
   local f
-  for f in "$HOME/.config/meetrec/api-key" "$HOME/.config/dictate/api-key" \
-           "$HOME/.config/voxtype-elevenlabs-adapter/api-key"; do
+  for f in "$HOME/.config/meetrec/api-key" "$HOME/.config/dictate/api-key"; do
     if [ -s "$f" ]; then tr -d '\r\n' < "$f"; return; fi
   done
   return 1

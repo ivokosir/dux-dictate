@@ -60,7 +60,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             language: "en".into(),
-            luna_command: home().join(".local/bin/voxtype-luna-cleanup").display().to_string(),
+            luna_command: home().join(".local/bin/dictate-clean").display().to_string(),
             luna_timeout_secs: 95,
             keep: 20,
         }

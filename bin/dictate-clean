@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# dictate-clean: tidies a transcript with Luna (stdin -> stdout). This is the ✨ button.
+# The prompt is ~/.config/dictate/cleanup-prompt.txt (or $DICTATE_CLEAN_PROMPT).
+set -euo pipefail
+
+transcript="$(< /dev/stdin)"
+
+if [[ -z "${transcript//[[:space:]]/}" ]]; then
+  exit 1
+fi
+
+config_root="${XDG_CONFIG_HOME:-$HOME/.config}"
+prompt_file="${DICTATE_CLEAN_PROMPT:-$config_root/dictate/cleanup-prompt.txt}"
+codex_bin="${CODEX_BIN:-codex}"
+runtime_root="${XDG_RUNTIME_DIR:-/tmp}"
+runtime_dir="$(mktemp -d "$runtime_root/dictate-clean.XXXXXX")"
+result_file="$runtime_dir/result.txt"
+
+cleanup() {
+  rm -f -- "$result_file"
+  rmdir -- "$runtime_dir" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+[[ -r "$prompt_file" ]]
+command -v "$codex_bin" >/dev/null
+
+prompt="$(< "$prompt_file")"
+
+printf '%s' "$transcript" | timeout --signal=TERM 90s \
+  "$codex_bin" exec \
+  --model gpt-6-luna \
+  --config 'model_reasoning_effort="low"' \
+  --config 'service_tier="fast"' \
+  --config 'features.fast_mode=true' \
+  --sandbox read-only \
+  --cd "$runtime_dir" \
+  --skip-git-repo-check \
+  --ephemeral \
+  --ignore-user-config \
+  --ignore-rules \
+  --color never \
+  --output-last-message "$result_file" \
+  "$prompt" >/dev/null
+
+[[ -s "$result_file" ]]
+sed -e 's/[[:space:]]*$//' "$result_file"

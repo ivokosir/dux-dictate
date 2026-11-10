@@ -14,11 +14,9 @@ cargo build --release
 install -Dm755 target/release/dictate "$bin/dictate"
 install -Dm644 systemd/dictate.service "$conf/systemd/user/dictate.service"
 
-# Reuse the key from voxtype-elevenlabs-adapter if there is one.
-old_key="$conf/voxtype-elevenlabs-adapter/api-key"
-if [[ ! -s "$conf/dictate/api-key" && -s "$old_key" ]]; then
-  install -Dm600 "$old_key" "$conf/dictate/api-key"
-fi
+# ✨ clean-up: the script runs from here; your prompt is yours to edit.
+ln -sfn "$PWD/bin/dictate-clean" "$bin/dictate-clean"
+[[ -e "$conf/dictate/cleanup-prompt.txt" ]] || install -Dm644 config/cleanup-prompt.txt "$conf/dictate/cleanup-prompt.txt"
 
 # Meeting: the scripts run from here.
 ln -sfn "$PWD/bin/meetrec" "$bin/meetrec"
