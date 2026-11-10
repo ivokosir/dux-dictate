@@ -1,25 +1,36 @@
 # dictate + meeting
 
-One DankMaterialShell bar button with two modes. Click the title in the popout (**Dictate ⇅** / **Meeting ⇅**) to switch; the mode is remembered.
+One DankMaterialShell bar button for two things that can run at the same time:
 
 - **Dictate:** talk, and the text is pasted where you are typing (ElevenLabs Scribe).
-- **Meeting:** record your mic + what you hear (e.g. a WhatsApp call) into one file.
+- **Record:** record a meeting, your mic + what you hear (e.g. a WhatsApp call), into one file.
 
-Both work the same way: click the bar button for the popout, **right click starts/stops the current mode**. While something records the button is filled and shows a timer (teal = dictating, red = meeting). A dot next to the title tells you the other mode is busy too.
+```
+[● Record]                          [🎙 Dictate]     both idle
+[■ 12:03]                     0:07 [✕] [✨] [✓]     both at work
+--------------------------------------------------
+[ Dictations | Meetings ]        (message) 📁 🗑
+the files
+```
+
+- **Top row:** the two controls, always there. They don't depend on each other or on the list below.
+- **The switch** only picks which files you see. The popout always opens on Dictations; pressing Record shows Meetings, so the new one is right there to name.
+- **Messages** all show in one spot, the right end of the row with the switch: green for "Copied", red for a problem ("Didn't go through"; hover it for what to do). Nothing else moves.
+- **Bar button:** click for the popout, right click starts/stops dictating. Teal with a timer while you dictate, red with the meeting's timer while a meeting records, and red with both timers when both run.
 
 ## Dictate
 
 - **Key (niri):** `Mod+B` starts, and pressing it again stops and pastes.
 - **Bar button:** teal with a timer while you talk; the icon breathes while it works (✨ while cleaning up). Click it for ✕ ✨ ✓.
 - **Card:** a small pill in the top-right corner, only for what the bar can't show. Problems show there as a short red line (with ⟳ retry and ✕). And while a fullscreen window covers the bar, it shows the take: glowing mic + timer; put the mouse on it and it turns into ✕ (throw away), ✨ (clean up with Luna, then paste) and ✓ (paste).
-- **Popout:** one row: mic, Dictate (+ timer while talking), and Start / ✕ ✨ ✓ / Cancel / Retry. A problem shows as a small red line under the title, with what to do about it. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open on Dictate.
-- **Recent is just files:** every take is `~/Music/Dictations/<time>.ogg` (+ `.txt`, + `.clean.txt`). Not transcribed → ⟳ Transcribe. Transcribed → ✨ clean up (or copy the cleaned text), 📋 copy raw text. The last 20 are kept; older ones go to the trash.
+- **Popout:** Dictate, then timer + ✕ ✨ ✓ while you talk, Cancel while it works, Retry after a failed upload. Finishing from the popout copies instead of pasting (you are in the popout, not your app). The card hides while the popout is open.
+- **Dictations are just files:** every take is `~/Music/Dictations/<time>.ogg` (+ `.txt`, + `.clean.txt`). Not transcribed → ⟳ Transcribe. Transcribed → ✨ clean up (or copy the cleaned text), 📋 copy raw text. The last 20 are kept; older ones go to the trash.
 - **One upload when you stop:** the whole recording goes to ElevenLabs Scribe (`scribe_v2`), which hears everything at once, and the text is pasted with Ctrl+V from a built-in virtual keyboard that sends real key codes. About 1 s of waiting for a short take, 3–4 s for a few minutes. (There used to be a live mode that typed while you talked; its realtime model was less correct, so it is gone.)
 - **No time limit:** the audio is written to disk while you talk, so long takes are fine and nothing is lost if something fails.
 
 ## Meeting
 
-- **Popout:** Record / Stop, and **Recent**: the newest 5 recordings, *Show N more* for all of them. Open folder and Delete all (asks first, goes to the trash) sit next to the title, like in Dictate. While recording, the name of the meeting is under the title; click it to rename.
+- **Popout:** Record, which turns into a red Stop with the time. **Meetings** lists the newest 5 recordings, *Show N more* for all of them, with Open folder and Delete all (asks first, goes to the trash) like Dictations. The meeting being recorded is the first row; click it to name it.
 - Files are `~/Music/Meetings/2026-11-09_14-30-00_<name>.ogg`. The name is exactly what you type (spaces and all); only characters a file name can't hold (`/ \ : * ? " < > |`) are dropped. Nothing else stores names.
 - On each recording (hover it): **Rename**, **Transcribe**, **Copy file** (paste into a chat/browser/file manager), **Show in folder**, **Delete** (goes to the trash, with its transcript). Click the row to play it.
 - **Transcribe** sends the recording to ElevenLabs (Scribe, with speakers) in the background and saves `<recording>.txt` next to it, in ElevenLabs' own text format: `00:00:04,400 --> 00:00:09,820 [speaker_1]` and then what was said. Click **Transcript** to open it; the same button then **copies the transcript** text. Renaming or deleting a recording takes its transcript along.
@@ -69,9 +80,8 @@ record-meeting [name]          foreground, Ctrl+C to stop
 For a key, through the bar:
 
 ```
-dms ipc call dictate popout        open the popout on Dictate
-dms ipc call dictate switchMode    Dictate <-> Meeting
-dms ipc call meetrec open          open the popout on Meeting
+dms ipc call dictate popout        open the popout (on Dictations)
+dms ipc call meetrec open          open the popout on Meetings
 dms ipc call meetrec toggle        start/stop a meeting
 dms ipc call meetrec rename        jump to naming the meeting
 ```
@@ -98,7 +108,7 @@ Dictate   pw-record -> dictate daemon -> ffmpeg -> ~/Music/Dictations/<time>.ogg
 Meeting   meetrec start -> ffmpeg (speaker monitor + mic, mixed) as meetrec.service -> ~/Music/Meetings/<time>_<name>.ogg
 
 DMS plugin (dms-plugin/)
-  DictateWidget.qml   the bar button + popout, both modes
+  DictateWidget.qml   the bar button + popout
                       <- `dictate watch` (JSON lines), <- $XDG_RUNTIME_DIR/meetrec/current (watched file)
   DictateCard.qml     the top-right card while dictating
 ```

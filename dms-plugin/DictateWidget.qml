@@ -5,107 +5,91 @@ import qs.Common
 import qs.DCommon.Widgets
 import qs.Modules.Plugins
 
-// One bar button, two modes. In the popout, click the title to switch.
+// One bar button for two things that can run at the same time:
 //
-//   Dictate   talk and the text is pasted         (the `dictate` daemon)
-//   Meeting   record your mic + what you hear     (the `meetrec` script)
+//   Dictate   talk and the text is pasted              (the `dictate` daemon)
+//   Record    record a meeting: mic + what you hear    (the `meetrec` script)
 //
-// Click the bar button for the popout, right click starts/stops the current mode.
-// The popout header is the same row in both modes:
-//   [icon] Title ⇅ 0:12 ................. [the mode's buttons]
-//          a small second line when there is something to say
-//          (Dictate: a problem, Meeting: the name of the recording)
-// and under it the mode's files (Recent).
+// Click the bar button for the popout, right click starts/stops dictating.
+//
+// Popout:
+//   [● Record]                          [🎙 Dictate]    both idle
+//   [■ 12:03]                     0:07 [✕] [✨] [✓]    both at work
+//   -------------------------------------------------
+//   [ Dictations | Meetings ]        (message) 📁 🗑    which files; opens on Dictations
+//   the files
+//
+// Every message ("Copied", "Didn't go through") shows in one spot: the right
+// end of the row with the switch. Nothing else moves.
 PluginComponent {
     id: root
 
     layerNamespacePlugin: "dictate"
 
-    // ---- mode ------------------------------------------------------------------------
+    // ---- popout state ------------------------------------------------------------------
 
-    property string mode: "dictate"
-    readonly property bool meeting: mode === "meeting"
     readonly property bool popoutOpen: interactionActive
-    readonly property bool dictOpen: popoutOpen && !meeting
-    readonly property bool meetOpen: popoutOpen && meeting
+    // Which files the list shows: "dictations" | "meetings". Nothing else depends on it.
+    property string tab: "dictations"
+    readonly property bool meetings: tab === "meetings"
+    // Set right before opening, to open on Meetings instead of Dictations.
+    property string openOn: ""
 
-    function setMode(m) {
-        m = m === "meeting" ? "meeting" : "dictate";
-        if (m === root.mode)
-            return;
-        root.mode = m;
-        meet.editingPath = "";
-        root.confirmClear = false;
-        if (root.pluginService && root.pluginId)
-            root.pluginService.savePluginState(root.pluginId, "mode", m);
-    }
-
-    // The mode is remembered (and shared by the bars on every screen).
-    function loadMode() {
-        if (!root.pluginService || !root.pluginId)
-            return;
-        const m = root.pluginService.loadPluginState(root.pluginId, "mode", "dictate");
-        root.mode = m === "meeting" ? "meeting" : "dictate";
-    }
-
-    Component.onCompleted: loadMode()
-    onPluginIdChanged: loadMode()
-    onPluginServiceChanged: loadMode()
-
-    Connections {
-        target: root.pluginService
-        function onPluginStateChanged(id) {
-            if (id === root.pluginId)
-                root.loadMode();
-        }
-    }
-
-    // Open the popout in a mode; if it is open in the other one, just switch.
-    function openAs(m) {
-        const switching = root.mode !== m;
-        root.setMode(m);
-        if (!(root.popoutOpen && switching))
-            root.triggerPopout();
-    }
-
-    // Dictate: the card steps aside, and finishing copies instead of pasting.
-    onDictOpenChanged: {
-        dict.run(["popout", dictOpen ? "on" : "off"]);
-        if (dictOpen) {
-            root.confirmClear = false;
+    function refreshTab() {
+        if (root.meetings) {
+            meet.refreshStatus();
+            meet.refreshList();
+            meet.refreshSize();
+        } else {
             dict.refreshList();
         }
     }
 
-    onMeetOpenChanged: {
-        if (meetOpen) {
-            root.confirmClear = false;
-            meet.refreshStatus();
-            meet.refreshList();
-            meet.refreshSize();
+    function showTab(t) {
+        if (t === root.tab)
+            return;
+        root.tab = t;
+        root.confirmClear = false;
+        meet.editingPath = "";
+        root.refreshTab();
+    }
+
+    // Tell the daemon: the card steps aside, and finishing copies instead of pasting.
+    onPopoutOpenChanged: {
+        dict.run(["popout", popoutOpen ? "on" : "off"]);
+        root.confirmClear = false;
+        if (popoutOpen) {
+            root.tab = root.openOn !== "" ? root.openOn : "dictations";
+            root.openOn = "";
+            root.refreshTab();
+        } else {
+            // Closing drops a half-typed meeting name.
+            meet.editingPath = "";
         }
     }
 
-    // Closing the popout drops a half-typed meeting name.
-    onPopoutOpenChanged: {
-        if (!popoutOpen)
-            meet.editingPath = "";
+    // Open the popout on a list; if it is open on the other one, just switch.
+    function openOnList(t) {
+        if (root.popoutOpen) {
+            if (root.tab !== t) {
+                root.showTab(t);
+                return;
+            }
+        } else {
+            root.openOn = t;
+        }
+        root.triggerPopout();
     }
 
-    pillRightClickAction: () => root.meeting ? meet.toggle() : dict.run(["toggle"])
+    pillRightClickAction: () => dict.run(["toggle"])
 
-    // dms ipc call dictate popout | switchMode   (e.g. for a keybind)
+    // dms ipc call dictate popout   (e.g. for a keybind)
     IpcHandler {
         target: "dictate"
 
         function popout(): string {
-            root.openAs("dictate");
+            root.openOnList("dictations");
             return "ok";
-        }
-
-        function switchMode(): string {
-            root.setMode(root.meeting ? "dictate" : "meeting");
-            return root.mode;
         }
     }
 
@@ -119,7 +103,7 @@ PluginComponent {
         }
 
         function open(): string {
-            root.openAs("meeting");
+            root.openOnList("meetings");
             return "ok";
         }
 
@@ -128,10 +112,14 @@ PluginComponent {
             const path = meet.recording ? meet.st.file : (meet.recordings.length > 0 ? meet.recordings[0].path : "");
             if (path === "")
                 return "nothing to rename";
-            root.setMode("meeting");
-            meet.editingPath = path;
-            if (!root.popoutOpen)
+            if (root.popoutOpen) {
+                root.showTab("meetings");
+                meet.editingPath = path;
+            } else {
+                root.openOn = "meetings";
+                meet.editingPath = path;
                 root.triggerPopout();
+            }
             return "ok";
         }
     }
@@ -139,10 +127,19 @@ PluginComponent {
     // ---- shared helpers ----------------------------------------------------------------
 
     property real nowMs: Date.now()
+    // A short message after something you did ("Copied", "Delete failed").
     property string toast: ""
+    property bool toastBad: false
     // "Delete all?" is being asked in the list header.
     property bool confirmClear: false
-    property string lastToast: ""
+    // What the message spot says right now: [icon, text, more on hover, is it bad] or null.
+    // Your last action first, else a dictation problem (those fade by themselves).
+    readonly property var dictProb: dict.problem ? (dict.problemInfo[dict.st.problem] || dict.problemInfo.other) : null
+    readonly property var note: toast !== "" ? [toastBad ? "error" : "check_circle", toast, "", toastBad]
+        : dictProb ? [dictProb[0], dictProb[1], dictProb[2], true] : null
+    // Kept while the message fades out.
+    property var lastNote: ["check_circle", "", "", false]
+    onNoteChanged: if (note) lastNote = note
     readonly property color recColor: "#d32f2f"
 
     function clock(ms) {
@@ -172,10 +169,16 @@ PluginComponent {
         return Qt.formatDate(d, "d MMM") + " " + hm;
     }
 
-    function showToast(text) {
+    function showToast(text, bad) {
         root.toast = text;
-        root.lastToast = text;
+        root.toastBad = bad === true;
+        toastTimer.interval = root.toastBad ? 4000 : 1800;
         toastTimer.restart();
+    }
+
+    // After a command: say it worked, or say (in red) that it did not.
+    function result(code, okText, failText) {
+        root.showToast(code === 0 ? okText : failText, code !== 0);
     }
 
     Timer {
@@ -237,7 +240,7 @@ PluginComponent {
         }
 
         onStChanged: {
-            if (root.dictOpen && dict.st.files !== dict._files)
+            if (root.popoutOpen && !root.meetings && dict.st.files !== dict._files)
                 dict.refreshList();
             dict._files = dict.st.files;
             if (dict.finishingHere && dict.phase === "idle") {
@@ -274,6 +277,14 @@ PluginComponent {
             onTriggered: watcher.running = true
         }
 
+        function clearAll() {
+            Proc.runCommand(null, [dict.bin, "trash", "all"], (out, code) => {
+                root.result(code, "All moved to trash", "Delete failed");
+                dict.showAll = false;
+                dict.refreshList();
+            }, 0, 20000, root);
+        }
+
         function refreshList() {
             Proc.runCommand(null, [dict.bin, "list", "20"], (out, code) => {
                 try {
@@ -295,14 +306,14 @@ PluginComponent {
             dict.setBusy(stamp, cmd);
             Proc.runCommand(null, [dict.bin, cmd, stamp], (out, code) => {
                 dict.setBusy(stamp, "");
-                root.showToast(code === 0 ? okText : "Failed");
+                root.result(code, okText, cmd === "clean" ? "Clean-up failed" : "Didn't go through");
                 dict.refreshList();
             }, 0, 300000, root);
         }
 
         function copyTake(t, which) {
             Proc.runCommand(null, [dict.bin, "copy", t.stamp, which], (out, code) => {
-                root.showToast(code !== 0 ? "Failed" : which === "clean" ? "Cleaned text copied" : "Copied");
+                root.result(code, which === "clean" ? "Cleaned text copied" : "Copied", "Copy failed");
             }, 0, 10000, root);
         }
 
@@ -394,16 +405,27 @@ PluginComponent {
             if (meet.busy)
                 return;
             meet.busy = true;
-            meet.run([meet.recording ? "stop" : "start"], () => {
+            const starting = !meet.recording;
+            meet.run([starting ? "start" : "stop"], (out, code) => {
                 meet.busy = false;
+                if (code !== 0)
+                    root.showToast(starting ? "Couldn't start recording" : "Couldn't stop recording", true);
                 meet.refreshStatus();
+                meet.refreshList();
+            });
+        }
+
+        function clearAll() {
+            meet.run(["delete", "all"], (out, code) => {
+                root.result(code, "All moved to trash", "Delete failed");
+                meet.showAll = false;
                 meet.refreshList();
             });
         }
 
         function transcribe(item) {
             meet.run(["transcribe", item.path], (out, code) => {
-                root.showToast(code === 0 ? "Transcribing…" : "No ElevenLabs key");
+                root.result(code, "Transcribing…", "No ElevenLabs key");
                 meet.refreshList();
             });
         }
@@ -411,7 +433,7 @@ PluginComponent {
         function act(cmd, path, message) {
             meet.run([cmd, path], (out, code) => {
                 if (message)
-                    root.showToast(code === 0 ? message : "Failed");
+                    root.result(code, message, "That didn't work");
             });
         }
 
@@ -420,7 +442,7 @@ PluginComponent {
             if (String(name).trim() === "")
                 return;
             meet.run(["rename", path, name], (out, code) => {
-                root.showToast(code === 0 ? "Renamed" : "Rename failed");
+                root.result(code, "Renamed", "Rename failed");
                 meet.refreshStatus();
                 meet.refreshList();
             });
@@ -473,15 +495,12 @@ PluginComponent {
 
     // ---- bar pill ----------------------------------------------------------------------
     //
-    //   idle       the mode's icon (mic / ◉)
-    //   dictating  teal fill, mic, timer
-    //   working    teal fill, the mic (or ✨ while cleaning up) pulses
-    //   meeting    red fill, ◉ (or the mic while you also dictate), the meeting's timer
+    //   idle        mic
+    //   dictating   teal fill, mic + timer          (working: the mic breathes)
+    //   meeting     red fill, ◉ + the meeting's timer
+    //   both        red fill (the meeting matters more), ◉ 12:03  mic 0:07
 
-    readonly property bool pillTimer: dict.recording || meet.recording
-    readonly property bool pillFilled: pillTimer || dict.busy
-    // The mic shows dictation; ◉ shows the meeting.
-    readonly property bool pillMic: dict.active || (!meet.recording && !root.meeting)
+    readonly property bool pillFilled: meet.recording || dict.recording || dict.busy
 
     // Plugins can't colour the pill itself, so this fills it from inside.
     component PillFill: Rectangle {
@@ -495,24 +514,29 @@ PluginComponent {
         color: meet.recording ? root.recColor : Theme.withAlpha(Theme.primary, 0.16)
     }
 
-    component PillIcon: DIcon {
-        name: !root.pillMic ? "radio_button_checked"
-            : dict.phase === "down" ? "mic_off"
+    component PillRec: DIcon {
+        name: "radio_button_checked"
+        filled: true
+        size: root.iconSize
+        color: "white"
+    }
+
+    component PillMic: DIcon {
+        name: dict.phase === "down" ? "mic_off"
             : dict.barError ? dict.problemIcon[dict.st.problem]
             : dict.phase === "cleaning" ? "auto_awesome" : "mic"
-        filled: root.pillMic ? dict.active : meet.recording
+        filled: dict.active
         size: root.iconSize
         color: meet.recording ? "white"
-            : !root.pillMic ? (Theme.widgetTextColor || Theme.surfaceText)
             : dict.phase === "down" ? Theme.surfaceVariantText
             : dict.barError ? Theme.error
             : (dict.recording || dict.busy) ? Theme.primary
             : (Theme.widgetTextColor || Theme.surfaceText)
-        opacity: root.pillMic ? pulse : (meet.recording ? 1 : 0.7)
+        opacity: pulse
 
         // Working (transcribing / cleaning up): the icon breathes.
         property real pulse: 1
-        readonly property bool working: root.pillMic && dict.busy
+        readonly property bool working: dict.busy
         onWorkingChanged: if (!working) pulse = 1
         SequentialAnimation on pulse {
             running: working
@@ -523,8 +547,6 @@ PluginComponent {
     }
 
     component PillTime: StyledText {
-        visible: root.pillTimer
-        text: meet.recording ? meet.elapsed : dict.elapsed
         font.pixelSize: Theme.fontSizeSmall
         font.features: { "tnum": 1 }
         color: meet.recording ? "white" : Theme.primary
@@ -542,12 +564,33 @@ PluginComponent {
             Row {
                 id: hRow
                 anchors.centerIn: parent
-                spacing: 4
-                PillIcon {
+                spacing: 8
+
+                Row {
+                    visible: meet.recording
+                    spacing: 4
                     anchors.verticalCenter: parent.verticalCenter
+                    PillRec {
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    PillTime {
+                        text: meet.elapsed
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
-                PillTime {
+                // Next to a meeting the mic only shows while it has something to say.
+                Row {
+                    visible: !meet.recording || dict.active
+                    spacing: 4
                     anchors.verticalCenter: parent.verticalCenter
+                    PillMic {
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
+                    PillTime {
+                        visible: dict.recording
+                        text: dict.elapsed
+                        anchors.verticalCenter: parent.verticalCenter
+                    }
                 }
             }
         }
@@ -565,10 +608,25 @@ PluginComponent {
             Column {
                 id: vCol
                 anchors.centerIn: parent
-                PillIcon {
+                spacing: 2
+
+                PillRec {
+                    visible: meet.recording
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
                 PillTime {
+                    visible: meet.recording
+                    text: meet.elapsed
+                    font.pixelSize: Theme.fontSizeSmall - 2
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                PillMic {
+                    visible: !meet.recording || dict.active
+                    anchors.horizontalCenter: parent.horizontalCenter
+                }
+                PillTime {
+                    visible: dict.recording
+                    text: dict.elapsed
                     font.pixelSize: Theme.fontSizeSmall - 2
                     anchors.horizontalCenter: parent.horizontalCenter
                 }
@@ -587,23 +645,27 @@ PluginComponent {
         tooltipSide: "top"
     }
 
-    // Filled pill button (Start, Record, Stop, Retry) or ghost (Cancel).
+    // A pill button: filled (Dictate, the red Stop), tonal (Record) or ghost (Cancel).
     component PillBtn: Rectangle {
         id: pb
         property string label
         property string icon: ""
         property color tint: Theme.primary
         property color onTint: Theme.onPrimary
+        property bool tonal: false
         property bool ghost: false
         property bool off: false
-        readonly property color fg: ghost ? Theme.surfaceVariantText : onTint
+        readonly property color fg: ghost ? Theme.surfaceVariantText : tonal ? Theme.surfaceText : onTint
+        property color iconTint: fg
+        readonly property bool hot: pbArea.containsMouse && !off
         signal clicked
         implicitHeight: 36
         implicitWidth: pbRow.implicitWidth + Theme.spacingL * 2
         radius: height / 2
         opacity: off ? 0.38 : 1
-        color: ghost ? (pbArea.containsMouse && !off ? Theme.withAlpha(Theme.surfaceText, 0.08) : "transparent")
-                     : (pbArea.containsMouse && !off ? Qt.lighter(tint, 1.1) : tint)
+        color: ghost ? (hot ? Theme.withAlpha(Theme.surfaceText, 0.08) : "transparent")
+            : tonal ? (hot ? Qt.lighter(Theme.surfaceContainerHigh, 1.2) : Theme.surfaceContainerHigh)
+            : (hot ? Qt.lighter(tint, 1.1) : tint)
         Row {
             id: pbRow
             anchors.centerIn: parent
@@ -613,7 +675,7 @@ PluginComponent {
                 name: pb.icon
                 size: 18
                 filled: true
-                color: pb.fg
+                color: pb.iconTint
                 anchors.verticalCenter: parent.verticalCenter
             }
             StyledText {
@@ -621,6 +683,7 @@ PluginComponent {
                 color: pb.fg
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
+                font.features: { "tnum": 1 }
                 anchors.verticalCenter: parent.verticalCenter
             }
         }
@@ -633,43 +696,50 @@ PluginComponent {
         }
     }
 
-    // "Copied", "Moved to trash": fades in place, nothing moves.
-    component ToastChip: Rectangle {
-        anchors.centerIn: parent
-        width: toastRow.implicitWidth + Theme.spacingL * 2
-        height: 26
-        radius: 13
-        color: Theme.withAlpha(Theme.success, 0.15)
-        opacity: root.toast !== "" ? 1 : 0
-        visible: opacity > 0
-        Behavior on opacity {
-            NumberAnimation { duration: 150 }
-        }
+    // One side of the Dictations | Meetings switch.
+    component TabBtn: Rectangle {
+        id: tb
+        property string label
+        property bool on: false
+        // A dot: this side is at work right now.
+        property bool busy: false
+        property color busyColor: Theme.primary
+        signal clicked
+        width: tbRow.implicitWidth + 24
+        height: 24
+        radius: 12
+        color: on ? Theme.withAlpha(Theme.primary, 0.18) : "transparent"
         Row {
-            id: toastRow
+            id: tbRow
             anchors.centerIn: parent
             spacing: 6
-            DIcon {
-                name: "check_circle"
-                size: 16
-                color: Theme.success
-                anchors.verticalCenter: parent.verticalCenter
-            }
             StyledText {
-                // Keep the last text while fading out.
-                text: root.toast !== "" ? root.toast : root.lastToast
+                text: tb.label
                 font.pixelSize: Theme.fontSizeSmall
-                color: Theme.surfaceText
+                font.weight: Font.Medium
+                color: tb.on ? Theme.primary : Theme.surfaceVariantText
                 anchors.verticalCenter: parent.verticalCenter
             }
+            Rectangle {
+                visible: tb.busy
+                width: 6
+                height: 6
+                radius: 3
+                color: tb.busyColor
+                anchors.verticalCenter: parent.verticalCenter
+            }
+        }
+        MouseArea {
+            anchors.fill: parent
+            cursorShape: Qt.PointingHandCursor
+            onClicked: tb.clicked()
         }
     }
 
-    // The row above a list, the same in both modes: title, Open folder, Delete all.
-    // "Delete all?" asks first, in the same row.
+    // The row above the list: which files, the one spot for messages, Open folder,
+    // Delete all ("Delete all?" asks first, in the same row).
     component ListHead: Item {
         id: lh
-        property string title
         property int count: 0
         signal openFolder
         signal clearAll
@@ -678,21 +748,87 @@ PluginComponent {
         width: parent ? parent.width - Theme.spacingS * 2 : 0
         height: 32
 
-        StyledText {
+        Rectangle {
+            id: tabs
             visible: !root.confirmClear
-            text: lh.title
-            font.pixelSize: Theme.fontSizeMedium
-            font.weight: Font.Medium
-            color: Theme.surfaceVariantText
+            width: tabRow.width + 4
+            height: 28
+            radius: 14
+            color: Theme.surfaceContainerHigh
             anchors.verticalCenter: parent.verticalCenter
+
+            Row {
+                id: tabRow
+                x: 2
+                anchors.verticalCenter: parent.verticalCenter
+                TabBtn {
+                    label: "Dictations"
+                    on: !root.meetings
+                    busy: dict.recording || dict.busy
+                    onClicked: root.showTab("dictations")
+                }
+                TabBtn {
+                    label: "Meetings"
+                    on: root.meetings
+                    busy: meet.recording
+                    busyColor: root.recColor
+                    onClicked: root.showTab("meetings")
+                }
+            }
         }
 
-        ToastChip {
+        // The message: green for "it worked", red for a problem. It fades in and
+        // out in place (the two buttons step aside), so nothing moves.
+        Rectangle {
+            id: chip
+            readonly property var say: root.note || root.lastNote
+            readonly property bool bad: say[3] === true
+            readonly property color ink: bad ? Theme.error : Theme.success
             visible: !root.confirmClear && opacity > 0
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            // Never wider than the space next to the switch: a long text ends in "…".
+            width: Math.min(chipRow.implicitWidth + Theme.spacingM * 2, lh.width - tabs.width - Theme.spacingS)
+            height: 26
+            radius: 13
+            color: Theme.withAlpha(ink, 0.15)
+            opacity: root.note ? 1 : 0
+            Behavior on opacity {
+                NumberAnimation { duration: 150 }
+            }
+            Row {
+                id: chipRow
+                x: Theme.spacingM
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 6
+                DIcon {
+                    name: chip.say[0]
+                    size: 16
+                    color: chip.ink
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                StyledText {
+                    width: Math.min(implicitWidth, lh.width - tabs.width - Theme.spacingS - Theme.spacingM * 2 - 22)
+                    text: chip.say[1]
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontSizeSmall
+                    color: Theme.surfaceText
+                    elide: Text.ElideRight
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+            // What to do about it, on hover.
+            StateLayer {
+                stateColor: "transparent"
+                acceptedButtons: Qt.NoButton
+                cursorShape: Qt.ArrowCursor
+                tooltipText: chip.say[2] !== "" ? chip.say[2] : null
+                tooltipSide: "bottom"
+            }
         }
 
         Row {
-            visible: !root.confirmClear
+            visible: !root.confirmClear && root.note === null
             anchors.right: parent.right
             anchors.verticalCenter: parent.verticalCenter
 
@@ -732,7 +868,7 @@ PluginComponent {
                     anchors.verticalCenter: parent.verticalCenter
                 }
                 StyledText {
-                    text: "Delete all " + lh.count + "?"
+                    text: "Delete all " + lh.count + (root.meetings ? " meetings?" : " dictations?")
                     font.pixelSize: Theme.fontSizeMedium
                     font.weight: Font.Medium
                     color: Theme.surfaceText
@@ -930,7 +1066,7 @@ PluginComponent {
                 iconName: "delete"
                 tip: "Delete (to trash)"
                 onClicked: Proc.runCommand(null, [dict.bin, "trash", tr.take.stamp], (out, code) => {
-                    root.showToast(code === 0 ? "Moved to trash" : "Delete failed");
+                    root.result(code, "Moved to trash", "Delete failed");
                     dict.refreshList();
                 }, 0, 10000, root)
             }
@@ -1138,9 +1274,109 @@ PluginComponent {
                 iconName: "delete"
                 tip: "Delete (to trash)"
                 onClicked: meet.run(["delete", rr.item.path], (out, code) => {
-                    root.showToast(code === 0 ? "Moved to trash" : "Delete failed");
+                    root.result(code, "Moved to trash", "Delete failed");
                     meet.refreshList();
                 })
+            }
+        }
+    }
+
+    // The meeting being recorded, on top of the Meetings list. Click to name it.
+    component NowRow: Item {
+        id: nr
+        readonly property bool editing: meet.editingPath !== "" && meet.editingPath === meet.st.file
+
+        x: Theme.spacingS
+        width: parent ? parent.width - Theme.spacingS * 2 : 0
+        height: 54
+
+        HoverHandler {
+            id: nowHover
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            radius: Theme.cornerRadius
+            color: Theme.surfaceText
+            opacity: nowMouse.pressed ? 0.1 : nowHover.hovered ? 0.05 : 0
+        }
+
+        MouseArea {
+            id: nowMouse
+            anchors.fill: parent
+            enabled: !nr.editing
+            cursorShape: Qt.PointingHandCursor
+            onClicked: meet.editingPath = meet.st.file
+        }
+
+        Rectangle {
+            id: nowIcon
+            x: Theme.spacingS
+            width: 36
+            height: 36
+            radius: 18
+            color: root.recColor
+            anchors.verticalCenter: parent.verticalCenter
+
+            DIcon {
+                anchors.centerIn: parent
+                name: "radio_button_checked"
+                filled: true
+                size: 18
+                color: "white"
+            }
+        }
+
+        Column {
+            id: nowCol
+            anchors.left: nowIcon.right
+            anchors.leftMargin: Theme.spacingM
+            anchors.right: parent.right
+            anchors.rightMargin: Theme.spacingS
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 2
+
+            Loader {
+                active: nr.editing
+                visible: active
+                width: parent.width
+                sourceComponent: NameEdit {
+                    path: meet.st.file
+                    initial: meet.currentLabel
+                }
+            }
+
+            Row {
+                visible: !nr.editing
+                spacing: 6
+
+                StyledText {
+                    width: Math.min(implicitWidth, nowCol.width - 22)
+                    text: meet.currentLabel
+                    textFormat: Text.PlainText
+                    font.pixelSize: Theme.fontSizeMedium
+                    color: Theme.surfaceText
+                    elide: Text.ElideRight
+                    wrapMode: Text.NoWrap
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+                DIcon {
+                    name: "edit"
+                    size: 16
+                    color: nowHover.hovered ? Theme.primary : Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+            }
+
+            StyledText {
+                visible: !nr.editing
+                width: parent.width
+                text: "Recording now · " + meet.elapsed + " · " + root.fmtSize(meet.st.size)
+                font.pixelSize: Theme.fontSizeSmall
+                font.features: { "tnum": 1 }
+                color: Theme.error
+                elide: Text.ElideRight
+                wrapMode: Text.NoWrap
             }
         }
     }
@@ -1151,10 +1387,11 @@ PluginComponent {
         PopoutComponent {
             id: popout
 
+            // Only while you can see it: the size of the file being recorded.
             Timer {
                 interval: 2000
                 repeat: true
-                running: root.meetOpen && meet.recording
+                running: root.popoutOpen && root.meetings && meet.recording
                 onTriggered: meet.refreshSize()
             }
 
@@ -1164,234 +1401,77 @@ PluginComponent {
                 bottomPadding: Theme.spacingS
                 spacing: Theme.spacingS
 
-                // Header: the same row in every mode and state.
+                // The two controls. They don't depend on each other or on the list below.
                 Item {
-                    id: head
-                    readonly property bool down: !root.meeting && dict.phase === "down"
-                    readonly property var prob: !root.meeting && dict.problem ? (dict.problemInfo[dict.st.problem] || dict.problemInfo.other)
-                        : down ? ["mic_off", "Service not running", "systemctl --user start dictate"] : null
-                    readonly property bool renaming: root.meeting && meet.recording && meet.editingPath !== "" && meet.editingPath === meet.st.file
-
                     x: Theme.spacingS
                     width: parent.width - Theme.spacingS * 2
-                    height: 44
+                    height: 40
 
-                    Rectangle {
-                        id: headIcon
-                        width: 40
-                        height: 40
-                        radius: 20
+                    // Left: record a meeting. While recording: stop + how long it has been.
+                    PillBtn {
                         anchors.verticalCenter: parent.verticalCenter
-                        color: root.meeting ? (meet.recording ? root.recColor : Theme.surfaceContainerHigh)
-                            : head.prob ? Theme.withAlpha(Theme.error, 0.14)
-                            : (dict.recording || dict.busy) ? Theme.withAlpha(Theme.primary, 0.16)
-                            : Theme.surfaceContainerHigh
-
-                        DSpinner {
-                            anchors.fill: parent
-                            size: 40
-                            strokeWidth: 2
-                            color: Theme.primary
-                            visible: !root.meeting && dict.busy
-                            running: visible && root.popoutOpen
-                        }
-                        DIcon {
-                            anchors.centerIn: parent
-                            name: root.meeting ? "radio_button_checked"
-                                : head.prob ? head.prob[0]
-                                : dict.phase === "cleaning" ? "auto_awesome" : "mic"
-                            filled: root.meeting ? meet.recording : true
-                            size: 22
-                            color: root.meeting ? (meet.recording ? "white" : Theme.surfaceVariantText)
-                                : head.prob ? Theme.error
-                                : (dict.recording || dict.busy) ? Theme.primary
-                                : Theme.surfaceVariantText
+                        tonal: !meet.recording
+                        tint: root.recColor
+                        onTint: "white"
+                        iconTint: meet.recording ? "white" : Theme.error
+                        icon: meet.recording ? "stop" : "fiber_manual_record"
+                        label: meet.recording ? meet.elapsed : "Record"
+                        off: meet.busy
+                        onClicked: {
+                            // Show the meetings, so the new one is right there to name.
+                            root.showTab("meetings");
+                            meet.toggle();
                         }
                     }
 
-                    Column {
-                        // The title button has 8 px of its own padding.
-                        anchors.left: headIcon.right
-                        anchors.leftMargin: Theme.spacingM - 8
-                        anchors.right: headRight.left
-                        anchors.rightMargin: Theme.spacingS
-                        anchors.verticalCenter: parent.verticalCenter
-
-                        // Naming the meeting being recorded takes the whole spot.
-                        Loader {
-                            active: head.renaming
-                            visible: active
-                            x: 8
-                            width: parent.width - 8
-                            sourceComponent: NameEdit {
-                                path: meet.st.file
-                                initial: meet.currentLabel
-                            }
-                        }
-
-                        Row {
-                            visible: !head.renaming
-                            height: 28
-                            spacing: 0
-
-                            // The title is the mode switch: Dictate <-> Meeting.
-                            Rectangle {
-                                width: titleRow.width + 16
-                                height: parent.height
-                                radius: height / 2
-                                color: "transparent"
-
-                                Row {
-                                    id: titleRow
-                                    x: 8
-                                    anchors.verticalCenter: parent.verticalCenter
-                                    spacing: 4
-
-                                    StyledText {
-                                        text: root.meeting ? "Meeting" : "Dictate"
-                                        font.pixelSize: Theme.fontSizeLarge
-                                        font.weight: Font.Medium
-                                        color: Theme.surfaceText
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    DIcon {
-                                        name: "unfold_more"
-                                        size: 16
-                                        color: Theme.surfaceVariantText
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                    // A dot when the other mode is at work right now.
-                                    Rectangle {
-                                        visible: root.meeting ? (dict.recording || dict.busy) : meet.recording
-                                        width: 8
-                                        height: 8
-                                        radius: 4
-                                        color: root.meeting ? Theme.primary : root.recColor
-                                        anchors.verticalCenter: parent.verticalCenter
-                                    }
-                                }
-
-                                StateLayer {
-                                    tooltipText: root.meeting ? "Switch to Dictate" : "Switch to Meeting"
-                                    tooltipSide: "bottom"
-                                    onClicked: root.setMode(root.meeting ? "dictate" : "meeting")
-                                }
-                            }
-
-                            StyledText {
-                                visible: root.meeting ? meet.recording : dict.recording
-                                anchors.verticalCenter: parent.verticalCenter
-                                anchors.verticalCenterOffset: 1
-                                text: root.meeting ? meet.elapsed : dict.elapsed
-                                font.pixelSize: Theme.fontSizeMedium
-                                font.features: { "tnum": 1 }
-                                color: root.meeting ? root.recColor : Theme.primary
-                            }
-                        }
-
-                        // Dictate: what went wrong, and what to do about it.
-                        StyledText {
-                            visible: head.prob !== null
-                            x: 8
-                            width: parent.width - 8
-                            height: 16
-                            verticalAlignment: Text.AlignVCenter
-                            text: head.prob ? head.prob[1] + (head.prob[2] ? " <font color=\"" + Theme.surfaceVariantText + "\">· " + head.prob[2] + "</font>" : "") : ""
-                            textFormat: Text.StyledText
-                            font.pixelSize: Theme.fontSizeSmall
-                            color: Theme.error
-                            elide: Text.ElideRight
-                            wrapMode: Text.NoWrap
-                        }
-
-                        // Meeting being recorded: its name (click to rename) and size.
-                        Item {
-                            id: line2
-                            visible: root.meeting && meet.recording && !head.renaming
-                            x: 8
-                            width: parent.width - 8
-                            height: 16
-
-                            Row {
-                                id: nameRow
-                                anchors.verticalCenter: parent.verticalCenter
-                                spacing: 4
-
-                                StyledText {
-                                    width: Math.min(implicitWidth, Math.max(0, line2.width - 18 - sizeText.implicitWidth - 8))
-                                    text: meet.currentLabel
-                                    textFormat: Text.PlainText
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    color: Theme.surfaceText
-                                    elide: Text.ElideRight
-                                    wrapMode: Text.NoWrap
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                DIcon {
-                                    name: "edit"
-                                    size: 14
-                                    color: nameMouse.containsMouse ? Theme.primary : Theme.surfaceVariantText
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                                StyledText {
-                                    id: sizeText
-                                    text: "· " + root.fmtSize(meet.st.size)
-                                    font.pixelSize: Theme.fontSizeSmall
-                                    font.features: { "tnum": 1 }
-                                    color: Theme.surfaceVariantText
-                                    anchors.verticalCenter: parent.verticalCenter
-                                }
-                            }
-
-                            MouseArea {
-                                id: nameMouse
-                                anchors.fill: nameRow
-                                hoverEnabled: true
-                                cursorShape: Qt.PointingHandCursor
-                                onClicked: meet.editingPath = meet.st.file
-                            }
-                        }
-                    }
-
-                    // Right side: the buttons that make sense right now.
+                    // Right: dictate. While talking: timer + ✕ ✨ ✓.
                     Row {
-                        id: headRight
                         anchors.right: parent.right
                         anchors.verticalCenter: parent.verticalCenter
                         spacing: 6
 
-                        // Meeting: Record / Stop.
-                        PillBtn {
-                            visible: root.meeting
-                            tint: meet.recording ? root.recColor : Theme.primary
-                            onTint: meet.recording ? "white" : Theme.onPrimary
-                            icon: meet.recording ? "stop" : "fiber_manual_record"
-                            label: meet.recording ? "Stop" : "Record"
-                            off: meet.busy
-                            onClicked: meet.toggle()
+                        StyledText {
+                            visible: dict.recording
+                            rightPadding: 4
+                            text: dict.elapsed
+                            font.pixelSize: Theme.fontSizeMedium
+                            font.features: { "tnum": 1 }
+                            color: Theme.primary
+                            anchors.verticalCenter: parent.verticalCenter
                         }
 
-                        // Dictate: Start, or Retry after a failed upload.
+                        // Idle: Dictate. After a failed upload: Retry. Daemon gone: off.
                         PillBtn {
-                            visible: !root.meeting && !dict.recording && !dict.busy
-                            icon: dict.st.can_retry === true && dict.problem ? "refresh" : "mic"
-                            label: dict.st.can_retry === true && dict.problem ? "Retry" : "Start"
+                            readonly property bool retry: dict.problem && dict.st.can_retry === true
+                            visible: !dict.recording && !dict.busy
+                            icon: !dict.up ? "mic_off" : retry ? "refresh" : "mic"
+                            label: !dict.up ? "Service off" : retry ? "Retry" : "Dictate"
                             off: !dict.up
-                            onClicked: dict.run([dict.st.can_retry === true && dict.problem ? "retry" : "start"])
+                            onClicked: dict.run([retry ? "retry" : "start"])
                         }
 
-                        // Dictate, working: Cancel.
+                        // Working (transcribing / cleaning up).
+                        DSpinner {
+                            visible: dict.busy
+                            width: 22
+                            height: 22
+                            size: 22
+                            strokeWidth: 2
+                            color: Theme.primary
+                            running: dict.busy && root.popoutOpen
+                            anchors.verticalCenter: parent.verticalCenter
+                        }
                         PillBtn {
-                            visible: !root.meeting && dict.busy
+                            visible: dict.busy
                             ghost: true
                             icon: "close"
                             label: "Cancel"
                             onClicked: dict.run(["cancel"])
                         }
 
-                        // Dictate, talking: ✕ ✨ ✓.
+                        // Talking: ✕ ✨ ✓.
                         DActionButton {
-                            visible: !root.meeting && dict.recording
+                            visible: dict.recording
                             buttonSize: 36
                             // Always a circle (DMS makes 36 px buttons rounded squares).
                             radius: 18
@@ -1403,7 +1483,7 @@ PluginComponent {
                             onClicked: dict.run(["cancel"])
                         }
                         DActionButton {
-                            visible: !root.meeting && dict.recording
+                            visible: dict.recording
                             buttonSize: 36
                             radius: 18
                             iconSize: 18
@@ -1419,11 +1499,12 @@ PluginComponent {
                         }
                         // ✓: a plain filled circle (DActionButton morphs its shape on hover).
                         Rectangle {
-                            visible: !root.meeting && dict.recording
+                            visible: dict.recording
                             width: 36
                             height: 36
                             radius: 18
                             color: doneArea.containsMouse ? Qt.lighter(Theme.primary, 1.1) : Theme.primary
+                            anchors.verticalCenter: parent.verticalCenter
                             DIcon {
                                 anchors.centerIn: parent
                                 name: "check"
@@ -1459,34 +1540,32 @@ PluginComponent {
                     color: Theme.withAlpha(Theme.outline, 0.2)
                 }
 
-                // Under the line: the mode's files.
+                // Which files, messages, Open folder, Delete all.
+                ListHead {
+                    count: root.meetings ? meet.recordings.length : dict.visibleTakes.length
+                    onOpenFolder: {
+                        if (root.meetings)
+                            meet.run(["folder"]);
+                        else
+                            dict.run(["folder"]);
+                        root.closePopout();
+                    }
+                    onClearAll: root.meetings ? meet.clearAll() : dict.clearAll()
+                }
+
                 Loader {
                     width: parent.width
-                    sourceComponent: root.meeting ? meetBody : dictBody
+                    sourceComponent: root.meetings ? meetBody : dictBody
                 }
             }
 
-            // ---- Dictate: Recent ------------------------------------------------------
+            // ---- Dictations ---------------------------------------------------------------
 
             Component {
                 id: dictBody
 
                 Column {
                     spacing: Theme.spacingS
-
-                    ListHead {
-                        title: "Recent"
-                        count: dict.visibleTakes.length
-                        onOpenFolder: {
-                            dict.run(["folder"]);
-                            root.closePopout();
-                        }
-                        onClearAll: Proc.runCommand(null, [dict.bin, "trash", "all"], (out, code) => {
-                            root.showToast(code === 0 ? "All moved to trash" : "Delete failed");
-                            dict.showAll = false;
-                            dict.refreshList();
-                        }, 0, 20000, root)
-                    }
 
                     StyledText {
                         visible: dict.visibleTakes.length === 0
@@ -1529,7 +1608,7 @@ PluginComponent {
                 }
             }
 
-            // ---- Meeting: Recent --------------------------------------------------------
+            // ---- Meetings -----------------------------------------------------------------
 
             Component {
                 id: meetBody
@@ -1537,22 +1616,13 @@ PluginComponent {
                 Column {
                     spacing: Theme.spacingS
 
-                    ListHead {
-                        title: "Recent"
-                        count: meet.recordings.length
-                        onOpenFolder: {
-                            meet.run(["folder"]);
-                            root.closePopout();
-                        }
-                        onClearAll: meet.run(["delete", "all"], (out, code) => {
-                            root.showToast(code === 0 ? "All moved to trash" : "Delete failed");
-                            meet.showAll = false;
-                            meet.refreshList();
-                        })
+                    // The one being recorded right now comes first.
+                    NowRow {
+                        visible: meet.recording
                     }
 
                     StyledText {
-                        visible: meet.recordings.length === 0
+                        visible: meet.recordings.length === 0 && !meet.recording
                         x: Theme.spacingM
                         text: "Nothing yet"
                         font.pixelSize: Theme.fontSizeSmall
