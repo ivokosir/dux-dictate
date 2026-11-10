@@ -1195,10 +1195,13 @@ PluginComponent {
 
                 StyledText {
                     id: rowInfo
+                    // Never wider than the row: when the buttons show on hover, it ends in "…".
+                    width: Math.min(implicitWidth, parent.width)
                     text: meet.whenOf(rr.item) + " · " + root.clock(Number(rr.item.duration) * 1000) + " · " + root.fmtSize(rr.item.size) + (txState.text !== "" ? " · " : "")
                     font.pixelSize: Theme.fontSizeSmall
                     font.features: { "tnum": 1 }
                     color: Theme.surfaceVariantText
+                    elide: Text.ElideRight
                     wrapMode: Text.NoWrap
                 }
 
@@ -1206,7 +1209,7 @@ PluginComponent {
                 StyledText {
                     id: txState
                     readonly property bool hasText: rr.item.transcript !== ""
-                    width: Math.min(implicitWidth, parent.width - rowInfo.width)
+                    width: Math.max(0, Math.min(implicitWidth, parent.width - rowInfo.width))
                     text: rr.item.tx === "running" ? "Transcribing…" : rr.item.tx === "failed" ? "Failed: " + rr.item.txError : hasText ? "Transcript" : ""
                     textFormat: Text.PlainText
                     font.pixelSize: Theme.fontSizeSmall
