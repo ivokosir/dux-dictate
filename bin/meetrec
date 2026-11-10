@@ -329,13 +329,13 @@ PY
   if [ -n "$err" ]; then
     printf '%s\n\n%s\n' "$file" "$err" > "$job"
     date +%s%N > "$EVENTS"
-    notify-send -a "Meeting Recorder" -u critical "Transcription failed" "$err" 2>/dev/null || true
+    notify-send -a "Meeting" -u critical "Transcription failed" "$err" 2>/dev/null || true
     return 1
   fi
   rm -f "$job"
   date +%s%N > "$EVENTS"
   local txt="${file%.*}.txt" act
-  act=$(notify-send -a "Meeting Recorder" -i text-x-generic \
+  act=$(notify-send -a "Meeting" -i text-x-generic \
     -A copy="Copy transcript" -A open="Open" \
     "Transcript ready" "$(basename "$txt")" 2>/dev/null) || true
   case "$act" in
