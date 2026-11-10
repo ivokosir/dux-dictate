@@ -217,6 +217,7 @@ PluginComponent {
         // [icon, what went wrong, what to do]
         readonly property var problemInfo: ({
             cleanfail: ["auto_awesome", "Clean-up failed", "Raw text used instead"],
+            copy: ["content_paste_off", "Couldn't copy", "The text is saved under Dictations"],
             paste: ["content_paste", "Couldn't paste", "It's on your clipboard"],
             nospeech: ["voice_over_off", "No speech heard", ""],
             mic: ["mic_off", "Mic not working", "Check the input device"],
@@ -1196,7 +1197,8 @@ PluginComponent {
                 StyledText {
                     id: rowInfo
                     // Never wider than the row: when the buttons show on hover, it ends in "…".
-                    width: Math.min(implicitWidth, parent.width)
+                    // The Transcript link keeps its room; the numbers give way first.
+                    width: Math.min(implicitWidth, Math.max(0, parent.width - Math.min(txState.implicitWidth, 96)))
                     text: meet.whenOf(rr.item) + " · " + root.clock(Number(rr.item.duration) * 1000) + " · " + root.fmtSize(rr.item.size) + (txState.text !== "" ? " · " : "")
                     font.pixelSize: Theme.fontSizeSmall
                     font.features: { "tnum": 1 }

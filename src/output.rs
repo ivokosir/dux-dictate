@@ -41,17 +41,23 @@ pub async fn copy(text: &str) -> Result<()> {
     let mut stdin = child.stdin.take().context("no stdin")?;
     stdin.write_all(text.as_bytes()).await?;
     drop(stdin);
-    let _ = tokio::time::timeout(Duration::from_secs(2), child.wait()).await;
-    Ok(())
+    // wl-copy's first process ends as soon as the clipboard is ours. If it says it
+    // failed, or never answers, nothing was copied: say so instead of "Copied".
+    match tokio::time::timeout(Duration::from_secs(5), child.wait()).await {
+        Ok(Ok(status)) if status.success() => Ok(()),
+        Ok(Ok(status)) => bail!("wl-copy failed ({status})"),
+        Ok(Err(error)) => Err(error).context("wl-copy failed"),
+        Err(_) => bail!("the clipboard did not answer"),
+    }
 }
 
-/// Copies the text and presses Ctrl+V.
-/// Newlines stay text instead of acting as Enter presses.
-pub async fn paste(text: &str) -> Result<()> {
+/// Presses Ctrl+V in the app that has focus (the text is on the clipboard already).
+/// A paste keeps newlines as text; typed, they would act as Enter presses.
+pub async fn press_paste() -> Result<()> {
     if std::env::var_os("DICTATE_NO_PASTE").is_some() {
         return Ok(());
     }
-    copy(text).await?;
+    // Give the app a moment to see the new clipboard.
     tokio::time::sleep(Duration::from_millis(150)).await;
     tokio::task::spawn_blocking(crate::keyboard::paste_keys)
         .await?

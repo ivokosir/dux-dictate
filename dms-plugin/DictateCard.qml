@@ -106,6 +106,7 @@ PluginComponent {
     // [icon, text, small text after it]
     readonly property var problemInfo: ({
         cleanfail: ["auto_awesome", "Clean-up failed", "pasted raw"],
+        copy: ["content_paste_off", "Couldn't copy", "saved under Dictations"],
         paste: ["content_paste", "Couldn't paste", "on clipboard"],
         nospeech: ["voice_over_off", "No speech heard", ""],
         mic: ["mic_off", "Mic not working", ""],

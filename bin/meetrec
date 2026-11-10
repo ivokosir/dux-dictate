@@ -65,8 +65,11 @@ cmd_start() {
   sink_monitor="$(pactl get-default-sink).monitor"
   mic="$(pactl get-default-source)"
   systemctl --user reset-failed "$UNIT.service" 2>/dev/null || true
+  # The state goes in first: if ffmpeg dies at once, ExecStopPost empties it
+  # again and nothing is left saying "recording".
+  printf '%s\n%s\n' "$out" "$(date +%s%3N)" > "$STATE"
   # ffmpeg finalizes the file on SIGINT; that exits 255, which counts as success.
-  systemd-run --user --quiet --collect --unit="$UNIT" \
+  if ! systemd-run --user --quiet --collect --unit="$UNIT" \
     --description="Meeting recording" \
     -p KillSignal=SIGINT -p SuccessExitStatus=255 -p TimeoutStopSec=15 \
     -p ExecStopPost="/usr/bin/truncate -s 0 $STATE" \
@@ -75,8 +78,11 @@ cmd_start() {
       -thread_queue_size 1024 -f pulse -i "$mic" \
       -filter_complex "amix=inputs=2:duration=longest:normalize=0,alimiter=limit=0.95" \
       -ac 1 -c:a libopus -b:a 32k -flush_packets 1 \
-      "$out"
-  printf '%s\n%s\n' "$out" "$(date +%s%3N)" > "$STATE"
+      "$out"; then
+    : > "$STATE"
+    echo "could not start the recording" >&2
+    exit 1
+  fi
   echo "$out"
 }
 
@@ -273,7 +279,11 @@ cmd_transcribe() {
   mkdir -p "$TX_DIR"
   job="$(job_of "$file")"
   if [ -n "$job" ] && [ -z "$(sed -n 3p "$job")" ]; then
-    echo "already transcribing" >&2; exit 0
+    # No error saved: it is running, unless its worker died without a word.
+    local pid; pid="$(sed -n 2p "$job")"
+    if [ -z "$pid" ] || kill -0 "$pid" 2>/dev/null; then
+      echo "already transcribing" >&2; exit 0
+    fi
   fi
   [ -n "$job" ] || job="$(mktemp "$TX_DIR/job.XXXXXX")"
   printf '%s\n' "$file" > "$job"
@@ -287,12 +297,16 @@ cmd__tx() {
   printf '%s\n%s\n' "$(sed -n 1p "$job")" "$$" > "$job"
   file="$(sed -n 1p "$job")"
   resp="$(mktemp)"
+  # Whatever happens (the recording may be deleted meanwhile), leave no temp files.
+  trap 'rm -f "$resp" "$resp.err"' EXIT
   code=$(curl -sS --max-time 3600 -o "$resp" -w '%{http_code}' \
     -H @<(printf 'xi-api-key: %s\n' "$(api_key)") \
     -F model_id=scribe_v2 -F diarize=true -F tag_audio_events=true \
     -F 'additional_formats=[{"format":"txt","include_speakers":true,"include_timestamps":true}]' \
     -F "file=@-;filename=$(basename "$file" | tr -d ';"')" \
     https://api.elevenlabs.io/v1/speech-to-text < "$file" 2>"$resp.err") || code=000
+  # Deleted meanwhile? Then there is nothing to save.
+  [ -f "$job" ] || return 0
   # Renamed meanwhile? Save next to the new name.
   file="$(sed -n 1p "$job")"
   err=$(python3 - "$resp" "$code" "${file%.*}.txt" "$resp.err" <<'PY'

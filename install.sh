@@ -23,9 +23,12 @@ ln -sfn "$PWD/bin/meetrec" "$bin/meetrec"
 ln -sfn "$PWD/bin/record-meeting" "$bin/record-meeting"
 
 # One plugin for both. The old separate "Meeting Recorder" plugin goes away.
-# Dux Shell keeps its config in ~/.config/dms (older DankMaterialShell: ~/.config/DankMaterialShell).
+# Dux Shell keeps its config in ~/.config/dms. Only an existing older setup
+# (DankMaterialShell, no dms folder yet) still uses the old place.
 shell_conf="$conf/dms"
-[[ -d "$shell_conf" ]] || shell_conf="$conf/DankMaterialShell"
+if [[ ! -d "$shell_conf" && -d "$conf/DankMaterialShell" ]]; then
+  shell_conf="$conf/DankMaterialShell"
+fi
 plugins="$shell_conf/plugins"
 mkdir -p "$plugins"
 ln -sfn "$PWD/dms-plugin" "$plugins/dictate"

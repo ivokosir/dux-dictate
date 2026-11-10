@@ -148,6 +148,16 @@ fn atty_stdin() -> bool {
     unsafe { libc::isatty(0) == 1 }
 }
 
+/// The take the daemon is busy with, if it is running and has one.
+async fn current_take() -> Option<String> {
+    let stream = UnixStream::connect(socket_path()).await.ok()?;
+    let (read, mut write) = stream.into_split();
+    write.write_all(b"status\n").await.ok()?;
+    let line = BufReader::new(read).lines().next_line().await.ok()??;
+    let status: serde_json::Value = serde_json::from_str(&line).ok()?;
+    status["current"].as_str().filter(|s| !s.is_empty()).map(str::to_owned)
+}
+
 async fn client(line: String) -> Result<()> {
     let stream = match UnixStream::connect(socket_path()).await {
         Ok(stream) => stream,
@@ -216,8 +226,12 @@ async fn takes(args: &[String]) -> Result<()> {
         "reveal" => files::reveal(&files::audio(&dir, take()?)),
         "trash" => {
             if args.get(1).map(String::as_str) == Some("all") {
+                // Not the take that is being recorded or worked on right now.
+                let current = current_take().await;
                 for stamp in files::stamps(&dir) {
-                    files::trash(&dir, &stamp)?;
+                    if Some(&stamp) != current.as_ref() {
+                        files::trash(&dir, &stamp)?;
+                    }
                 }
             } else {
                 files::trash(&dir, take()?)?;

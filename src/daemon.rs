@@ -31,7 +31,7 @@ pub struct Snapshot {
     daemon: bool,
     /// idle | recording | transcribing | cleaning | problem
     state: String,
-    /// When state is "problem": cleanfail | paste | nospeech | mic | eleven | nokey | other
+    /// When state is "problem": cleanfail | copy | paste | nospeech | mic | eleven | nokey | other
     problem: String,
     /// Details for a problem (shown as a tooltip).
     message: String,
@@ -102,6 +102,8 @@ struct Daemon {
     /// Mic loudness 0..1, sent separately so the UI doesn't re-read the whole state ~20x/s.
     level: watch::Sender<f32>,
     ctl: Mutex<Ctl>,
+    /// One command at a time: two "start"s arriving together must not both see "idle".
+    commands: Mutex<()>,
     config: Mutex<Config>,
     http: reqwest::Client,
     dir: PathBuf,
@@ -182,6 +184,7 @@ impl Daemon {
     }
 
     fn command(self: &Arc<Self>, line: &str) -> String {
+        let _one_at_a_time = self.commands.lock().unwrap_or_else(|e| e.into_inner());
         let mut words = line.split_whitespace();
         let cmd = words.next().unwrap_or("");
         let args: Vec<&str> = words.collect();
@@ -206,7 +209,8 @@ impl Daemon {
                     self.idle(id);
                 }
             }
-            "retry" if !busy && state != "recording" => self.retry(),
+            // From the popout (or with "copy") a retry only copies, like finishing does.
+            "retry" if !busy && state != "recording" => self.retry((out == Out::Copy).then_some(Out::Copy)),
             "popout" => {
                 let open = args.first().copied() == Some("on");
                 self.update(|s| s.popout = open);
@@ -387,14 +391,20 @@ impl Daemon {
                 return;
             }
         }
-        let delivered = match out {
-            Out::Copy => output::copy(&text).await,
-            Out::Paste => output::paste(&text).await,
-        };
+        // Clipboard first; "paste" is then only the Ctrl+V. The two fail differently:
+        // after a failed copy the text is NOT on the clipboard.
+        let delivered: std::result::Result<(), (&str, anyhow::Error)> = async {
+            output::copy(&text).await.map_err(|e| ("copy", e))?;
+            if out == Out::Paste {
+                output::press_paste().await.map_err(|e| ("paste", e))?;
+            }
+            Ok(())
+        }
+        .await;
         files::prune(&self.dir, config.keep, &stamp);
         self.files_changed();
-        if let Err(error) = delivered {
-            return self.problem(id, "paste", error.to_string(), None);
+        if let Err((code, error)) = delivered {
+            return self.problem(id, code, format!("{error:#}"), None);
         }
         if let Some(message) = clean_failed {
             return self.problem(id, "cleanfail", message, None);
@@ -402,8 +412,9 @@ impl Daemon {
         self.idle(id);
     }
 
-    fn retry(self: &Arc<Self>) {
+    fn retry(self: &Arc<Self>, out_now: Option<Out>) {
         let Some(Failed { stamp, mode, out }) = self.ctl.lock().unwrap().failed.take() else { return };
+        let out = out_now.unwrap_or(out);
         let id = self.new_session();
         let config = self.config.lock().unwrap().clone();
         self.update(|s| {
@@ -494,6 +505,7 @@ pub async fn serve() -> Result<()> {
         snap: watch::channel(snapshot).0,
         level: watch::channel(0.0).0,
         ctl: Mutex::new(Ctl::default()),
+        commands: Mutex::new(()),
         config: Mutex::new(config),
         http: reqwest::Client::builder().user_agent(concat!("dictate/", env!("CARGO_PKG_VERSION"))).build()?,
         dir,
